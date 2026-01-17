@@ -1,0 +1,29 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.egg-info/
+
+# --- OS / Editor ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- Logs / Temp ---
+*.log
+logs/
+tmp/
+cache/
+
+# --- Data ---
+data/**
+!data/
+!data/tr_us_whitelist.csv        # wird versioniert (Quelle fürs Universum)
+!data/levels_cache_250d.csv      # Cache wird versioniert (Daily-Scan liest daraus)
+
+# --- Outputs ---
+out/**
+!out/
+!out/pal_hits_daily.csv
+!out/summary.json
