@@ -1,6 +1,9 @@
 # --- Python ---
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+*.so
 .venv/
 .env
 *.egg-info/
@@ -16,14 +19,18 @@ logs/
 tmp/
 cache/
 
-# --- Data ---
-data/**
-!data/
-!data/tr_us_whitelist.csv        # wird versioniert (Quelle fürs Universum)
-!data/levels_cache_250d.csv      # Cache wird versioniert (Daily-Scan liest daraus)
-
-# --- Outputs ---
+# --- Actions Output ---
 out/**
 !out/
 !out/pal_hits_daily.csv
+!out/pal_scores_daily.csv
+!out/pal_scores_daily_top.md
 !out/summary.json
+
+# --- Data: alles ignorieren, ABER bestimmte CSVs versionieren ---
+data/**
+!data/
+!data/tr_us_whitelist.csv
+!data/levels_cache_250d.csv
+# (optional) falls du manuell ein Universum pflegst:
+!data/universe_us.csv
