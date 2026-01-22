@@ -1,7 +1,7 @@
 {
-  "bar_date": "2026-01-20",
+  "bar_date": "2026-01-21",
   "universe": 3082,
-  "hits": 1,
+  "hits": 35,
   "gap_only": true,
   "rr_gate": ">=2.0",
   "lookback": 250
