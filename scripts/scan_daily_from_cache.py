@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Daily Gap Scan (Cache-only)
+# Daily Gap Scan (Cache-only) — VERSION 1.1
 #
 # SIGNAL (Gap-Reclaim, Variante B – sauber):
 #   1) Close(t-1) <= Entry-Fib (0.382)
@@ -9,14 +9,17 @@
 # ENTRY: Close(t0)
 # STOP : Low(t0)  (Gap-Kerze)
 #
-# HARD GATE:
-#   RR bis hi250 >= 2.0
+# HARD GATES:
+#   - RR bis hi250 >= 2.0
+#   - Gap-Größe <= 6%
+#   - Extension <= 1.2R
 #
-# hi250 / lo250 werden aus den letzten 250 Bars BIS t-1 berechnet (kein Look-Ahead)
+# hi250 / lo250 aus letzten 250 Bars BIS t-1 (kein Look-Ahead)
 
 import os
 import json
 import pandas as pd
+from datetime import date
 
 LOOKBACK = int(os.getenv("LOOKBACK", "250"))
 
@@ -37,8 +40,7 @@ def compute_score(
 ) -> float:
     """
     Score 0..100
-    Volumen + Platz dominieren
-    Extension misst Abstand vom Trigger (Fib), nicht vom Entry
+    Volumen + Platz dominieren, Overextension wird bestraft
     """
     s = 0.0
 
@@ -52,7 +54,7 @@ def compute_score(
     if bool(close_in_top40pct):
         s += 8.0
 
-    # Overextension-Malus (vom Trigger gemessen)
+    # Overextension-Malus (weich, Hard-Gate greift vorher)
     if float(extension_r) > 1.0:
         s -= min((float(extension_r) - 1.0) * 18.0, 30.0)
 
@@ -90,12 +92,11 @@ def main():
         last = g.iloc[-1]   # t0
         prev = g.iloc[-2]   # t-1
 
-        # Levels (bis t-1)
+        # Levels aus t-1
         win = g.iloc[-(LOOKBACK + 1):-1]
         hi250 = float(win["High"].max())
         lo250 = float(win["Low"].min())
 
-        # Entry-Trigger (Fib 0.382)
         entry_fib = hi250 - (hi250 - lo250) * 0.382
 
         # --- GAP-RECLAIM ---
@@ -107,39 +108,42 @@ def main():
         if not gap_valid:
             continue
 
-        # ENTRY / STOP (Variante B)
+        # Gap-Größe (Hard Gate)
+        gap_pct = ((float(last["Open"]) / entry_fib) - 1.0) * 100.0
+        if gap_pct > 6.0:
+            continue
+
+        # Entry / Stop
         entry_px = float(last["Close"])
         stop_px  = float(last["Low"])
-        r_one    = entry_px - stop_px
+        r_one = entry_px - stop_px
         if r_one <= 0:
             continue
 
-        # RR-Gate (>= 2R bis hi250)
+        # RR bis hi250 (Hard Gate)
         reward = hi250 - entry_px
         rr = reward / r_one
         if rr < 2.0:
             continue
 
-        # Gap-Größe (nur Info)
-        gap_pct = ((float(last["Open"]) / float(prev["Close"])) - 1.0) * 100.0
+        # Extension (Hard Gate)
+        extension_r = max(0.0, (entry_px - entry_fib) / r_one)
+        if extension_r > 1.2:
+            continue
 
         # Volumen
         vol_hist = g.iloc[-21:-1]["Volume"]
         vol20_med = float(vol_hist.median()) if len(vol_hist) >= 10 else 0.0
         rvol20 = (float(last["Volume"]) / vol20_med) if vol20_med > 0 else 0.0
-        dollar_vol_today = float(entry_px) * float(last["Volume"])
+        dollar_vol_today = entry_px * float(last["Volume"])
 
-        # Extension = Abstand vom Trigger (Fib) in R
-        extension_r = max(0.0, (entry_px - entry_fib) / r_one)
-
-        # Platz bis hi250 in R
+        # Platz
         room_to_high_r = reward / r_one
 
         # Close-Qualität
         rng = max(1e-6, float(last["High"]) - float(last["Low"]))
         close_in_top40pct = entry_px >= (float(last["Low"]) + 0.6 * rng)
 
-        # Spread-Schätzung
         spread_est = rng / max(1e-6, entry_px)
 
         score = compute_score(
@@ -166,9 +170,8 @@ def main():
             "hi250": round(hi250, 2),
             "lo250": round(lo250, 2),
 
-            "rr_to_hi250": round(rr, 2),
             "gap_pct": round(gap_pct, 2),
-
+            "rr_to_hi250": round(rr, 2),
             "rvol20": round(rvol20, 2),
             "dollar_vol_today": round(dollar_vol_today, 2),
 
@@ -196,14 +199,17 @@ def main():
         "universe": int(df["symbol"].nunique()),
         "hits": int(len(out)),
         "gap_only": True,
+        "gap_pct_max": 6.0,
+        "extension_r_max": 1.2,
         "rr_gate": ">=2.0",
-        "lookback": LOOKBACK
+        "lookback": LOOKBACK,
+        "version": "1.1"
     }
 
     with open("out/summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"Done -> {OUT_CSV} | Hits={len(out)}")
+    print(f"Done -> {OUT_CSV} | Hits={len(out)} | v1.1")
 
 
 if __name__ == "__main__":
