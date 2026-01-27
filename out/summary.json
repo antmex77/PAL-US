@@ -1,8 +1,8 @@
 {
-  "bar_date": "2026-01-22",
-  "universe": 3082,
-  "hits": 27,
+  "version": "v1.2_strict",
+  "bar_date": "2026-01-26",
+  "status": "NO_NEW_SIGNALS",
+  "new_signals": 0,
   "gap_only": true,
-  "rr_gate": ">=2.0",
-  "lookback": 250
+  "rr_gate": ">=2.5"
 }
