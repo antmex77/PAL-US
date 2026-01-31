@@ -1,8 +1,8 @@
 {
   "version": "v1.2_strict",
-  "bar_date": "2026-01-29",
-  "status": "NO_NEW_SIGNALS",
-  "new_signals": 0,
+  "bar_date": "2026-01-30",
+  "status": "NEW_SIGNALS",
+  "new_signals": 1,
   "gap_only": true,
   "rr_gate": ">=2.5"
 }
