@@ -1,42 +1,21 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – v1.3 STRUCTURAL_ACCEPT
-#
-# Fokus:
-# - Break über klaren Range-High
-# - Acceptance (kein Spike)
-# - Wenige, hochwertige Trades (CRC-Typ)
+# PAL Daily Scan – v1.3
+# SETUP B ONLY: Range Acceptance Breakout (CRC-DNA)
 
 import os
 import json
 import pandas as pd
 
-LOOKBACK = int(os.getenv("LOOKBACK", "250"))
+LOOKBACK_250 = int(os.getenv("LOOKBACK", "250"))
+RANGE_LOOKBACK = 60
+MIN_REJECTIONS = 3
 
 IN_CSV  = "data/levels_cache_250d.csv"
 OUT_CSV = "out/pal_hits_daily.csv"
 
 
-def today_utc_date():
+def today_utc():
     return pd.Timestamp.utcnow().date()
-
-
-def compute_score(rvol20, room_to_high_r, close_quality, spread_est):
-    s = 0.0
-
-    # Volumen
-    s += 45.0 * min(rvol20 / 2.5, 1.0)
-
-    # Raum
-    s += 45.0 * min(room_to_high_r / 3.0, 1.0)
-
-    # Close-Qualität
-    if close_quality:
-        s += 10.0
-
-    # Spread-Malus
-    s -= min(spread_est * 120.0, 15.0)
-
-    return round(max(0.0, min(100.0, s)), 2)
 
 
 def main():
@@ -45,120 +24,131 @@ def main():
 
     df = pd.read_csv(IN_CSV)
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-    df = df[df["date"] < today_utc_date()]
+    df = df[df["date"] < today_utc()]
 
-    rows = []
+    hits = []
 
     for sym, g in df.groupby("symbol"):
         g = g.sort_values("date")
-        if len(g) < LOOKBACK + 30:
+        if len(g) < LOOKBACK_250 + RANGE_LOOKBACK + 5:
             continue
 
-        last = g.iloc[-1]   # t0
+        last = g.iloc[-1]      # t0
+        hist = g.iloc[:-1]     # bis t-1
 
-        win = g.iloc[-(LOOKBACK + 1):-1]
-        prior_high = float(win["High"].max())
-        hi250 = prior_high
-        lo250 = float(win["Low"].min())
+        # ---- hi250 / lo250 ----
+        win250 = hist.iloc[-LOOKBACK_250:]
+        hi250 = float(win250["High"].max())
+        lo250 = float(win250["Low"].min())
         range250 = hi250 - lo250
         if range250 <= 0:
             continue
 
-        entry = float(last["Close"])
-        stop  = float(last["Low"])
+        # ---- Range Detection ----
+        range_win = hist.iloc[-RANGE_LOOKBACK:]
+        range_high = float(range_win["High"].max())
+
+        # Rejections zählen
+        rej = range_win[
+            (range_win["High"] >= range_high * 0.995) &
+            (range_win["Close"] < range_high)
+        ]
+        if len(rej) < MIN_REJECTIONS:
+            continue
+
+        # ---- Break & Acceptance ----
+        open_px  = float(last["Open"])
+        high_px  = float(last["High"])
+        low_px   = float(last["Low"])
+        close_px = float(last["Close"])
+
+        if not (
+            close_px > range_high and
+            low_px >= range_high and
+            close_px >= open_px
+        ):
+            continue
+
+        day_range = high_px - low_px
+        if day_range <= 0:
+            continue
+
+        # Close-Qualität
+        if close_px < (low_px + 0.60 * day_range):
+            continue
+
+        # ---- Risk / Reward ----
+        entry = close_px
+        stop  = range_high
         r_one = entry - stop
         if r_one <= 0:
             continue
 
-        # --- STRUCTURAL BREAK ---
-        if entry <= prior_high:
-            continue
-
-        # --- ACCEPTANCE ---
-        rng = float(last["High"]) - float(last["Low"])
-        if rng <= 0:
-            continue
-
-        close_quality = (
-            entry >= float(last["Open"]) and
-            entry >= (float(last["Low"]) + 0.65 * rng)
-        )
-        if not close_quality:
-            continue
-
-        # --- NO SPIKE ---
-        if entry > prior_high + 0.5 * r_one:
-            continue
-
-        # --- LEVEL HOLD ---
-        if stop < prior_high - 0.25 * r_one:
-            continue
-
-        # --- RR ---
-        reward = hi250 + range250 - entry
+        reward = hi250 - entry
         rr = reward / r_one
         if rr < 2.5:
             continue
 
-        # --- VOLUME ---
-        vol_hist = g.iloc[-21:-1]["Volume"]
-        vol20_med = float(vol_hist.median()) if len(vol_hist) >= 10 else 0.0
-        rvol20 = float(last["Volume"]) / vol20_med if vol20_med > 0 else 0.0
-        if rvol20 < 1.2:
+        # ---- Volume ----
+        vol_hist = hist.iloc[-21:]["Volume"]
+        vol_med = float(vol_hist.median()) if len(vol_hist) >= 10 else 0
+        rvol20 = float(last["Volume"]) / vol_med if vol_med > 0 else 0
+        if rvol20 < 1.0:
             continue
 
         dollar_vol = entry * float(last["Volume"])
-        spread_est = rng / entry
-        if spread_est > 0.08:
-            continue
+        spread_est = day_range / entry
 
-        room_to_high_r = reward / r_one
-
-        score = compute_score(
-            rvol20,
-            room_to_high_r,
-            close_quality,
-            spread_est
+        # ---- Score (klar & simpel) ----
+        score = (
+            min(rvol20 / 3.0, 1.0) * 40 +
+            min(rr / 3.0, 1.0) * 40 +
+            10 - min(spread_est * 100, 10)
         )
+        score = round(max(0, min(100, score)), 2)
 
-        rows.append({
+        hits.append({
             "symbol": sym,
             "date": str(last["date"]),
-            "open": round(float(last["Open"]), 2),
-            "high": round(float(last["High"]), 2),
-            "low": round(float(last["Low"]), 2),
-            "close": round(entry, 2),
-            "prior_range_high": round(prior_high, 2),
+            "open": round(open_px, 2),
+            "high": round(high_px, 2),
+            "low": round(low_px, 2),
+            "close": round(close_px, 2),
+            "range_high": round(range_high, 2),
             "stop": round(stop, 2),
-            "rr_to_target": round(rr, 2),
+            "hi250": round(hi250, 2),
+            "rr_to_hi250": round(rr, 2),
             "rvol20": round(rvol20, 2),
-            "dollar_vol_today": round(dollar_vol, 0),
-            "spread_est": round(spread_est, 4),
+            "dollar_vol": round(dollar_vol, 0),
+            "rejections": len(rej),
             "score": score
         })
 
-    out = pd.DataFrame(rows)
+    out = pd.DataFrame(hits)
+    os.makedirs("out", exist_ok=True)
+
     if out.empty:
-        print("Keine Treffer.")
+        out.to_csv(OUT_CSV, index=False)
         with open("out/summary.json", "w") as f:
             json.dump({
-                "version": "v1.3_structural_accept",
+                "version": "v1.3_setupB",
                 "hits": 0,
-                "setup": "STRUCTURAL_ACCEPT"
+                "note": "Keine Range-Acceptance-Breakouts"
             }, f, indent=2)
+        print("Keine Treffer.")
         return
 
-    out.sort_values(["score", "symbol"], ascending=[False, True], inplace=True)
+    out.sort_values("score", ascending=False, inplace=True)
     out.insert(0, "rank", range(1, len(out) + 1))
-
-    os.makedirs("out", exist_ok=True)
     out.to_csv(OUT_CSV, index=False)
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.3_structural_accept",
+            "version": "v1.3_setupB",
             "hits": int(len(out)),
-            "setup": "STRUCTURAL_ACCEPT"
+            "setup": "Range Acceptance Breakout",
+            "min_rejections": MIN_REJECTIONS,
+            "rr_gate": ">=2.5R"
         }, f, indent=2)
 
     print(f"Done -> {OUT_CSV} | Hits={len(out)}")
