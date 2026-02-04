@@ -1,59 +1,79 @@
 #!/usr/bin/env python3
-# PAL Daily Gap Scan – Version 1.3 (SETUP B / CRC ONLY)
+# PAL Daily Scan – v1.3 (SETUP B ONLY)
 #
-# Ziel:
-#   Ausschließlich CRC-ähnliche Trades:
-#   - Mehrfach getestete Range
-#   - Saubere Acceptance über Range-High
-#   - Expansion + Volumen
+# SETUP B:
+# Range Breakout with Acceptance
+# - Mehrfach getestete Range-Highs
+# - Echter Close-Break
+# - Volumen-Bestätigung
 #
-# SETUP B – Range Acceptance Breakout
+# KEIN:
+# - Base / grüne Linie
+# - Moving Averages
+# - Trend-Fortsetzung
 #
-# SIGNAL:
-#   1) Mehrere Rejections an Range-High (>=2)
-#   2) Close(t0) > Range-High
-#   3) Close in oberem 60 % der Tagesrange
-#
-# ENTRY: Close(t0)
-# STOP : Range-High
-#
-# HARD GATES:
-#   - RR bis hi250 >= 2.5
-#   - rVol20 >= 1.2
-#   - Spread < 6 %
-#
-# hi250 / lo250: letzte 250 Bars bis t-1
+# Ziel: Trades wie CRC, SNDA, AAPL (Aug)
 
 import os
 import json
 import pandas as pd
 
-LOOKBACK = int(os.getenv("LOOKBACK", "250"))
-IN_CSV   = "data/levels_cache_250d.csv"
-OUT_CSV  = "out/pal_hits_daily.csv"
+# ---------------- CONFIG ----------------
+LOOKBACK_MIN = 20
+LOOKBACK_MAX = 60
+MAX_RANGE_PCT = 0.18      # max 18 % Range
+HIGH_TOL = 0.005          # 0.5 % Toleranz für Range-High-Tests
+BREAK_BUFFER = 0.002      # 0.2 % echter Break
+MAX_EXTENSION = 0.06      # Anti-Chase
+MIN_VOL_MULT = 1.3
+
+IN_CSV  = "data/levels_cache_250d.csv"
+OUT_CSV = "out/pal_hits_daily.csv"
+
+# ----------------------------------------
 
 
 def today_utc_date():
-    return pd.Timestamp.now("UTC").date()
+    return pd.Timestamp.utcnow().date()
 
 
-def compute_score(rvol20, room_r, close_quality, spread):
-    s = 0.0
+def find_range(g):
+    """
+    Sucht eine valide Range im Fenster 20–60 Tage
+    """
+    for lb in range(LOOKBACK_MAX, LOOKBACK_MIN - 1, -1):
+        win = g.iloc[-(lb + 1):-1]  # bis t-1
+        hi = float(win["High"].max())
+        lo = float(win["Low"].min())
+        if lo <= 0:
+            continue
 
-    s += 45.0 * min(rvol20 / 3.0, 1.0)
-    s += 45.0 * min(room_r / 3.0, 1.0)
+        range_pct = (hi - lo) / lo
+        if range_pct > MAX_RANGE_PCT:
+            continue
 
-    if close_quality:
-        s += 10.0
+        # Wie oft wurde das RangeHigh getestet?
+        tests = win[abs(win["High"] - hi) / hi <= HIGH_TOL]
+        if len(tests) < 3:
+            continue
 
-    s -= min(spread * 100.0, 10.0)
+        # Kein vorheriger Close über RangeHigh
+        if (win["Close"] > hi).any():
+            continue
 
-    return round(max(0.0, min(100.0, s)), 2)
+        return {
+            "range_high": hi,
+            "range_low": lo,
+            "range_pct": round(range_pct, 3),
+            "lookback": lb
+        }
+
+    return None
 
 
 def main():
     if not os.path.exists(IN_CSV):
-        raise SystemExit("levels_cache fehlt")
+        raise SystemExit("❌ OHLCV-Cache fehlt")
 
     df = pd.read_csv(IN_CSV)
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
@@ -63,108 +83,79 @@ def main():
 
     for sym, g in df.groupby("symbol"):
         g = g.sort_values("date")
-        if len(g) < LOOKBACK + 30:
+        if len(g) < LOOKBACK_MAX + 5:
             continue
 
         last = g.iloc[-1]   # t0
-        prev = g.iloc[-2]
+        prev = g.iloc[-2]   # t-1
 
-        win = g.iloc[-(LOOKBACK + 1):-1]
-        hi250 = float(win["High"].max())
-        lo250 = float(win["Low"].min())
-        range250 = hi250 - lo250
-        if range250 <= 0:
+        rng = find_range(g)
+        if not rng:
             continue
 
-        # --- RANGE HIGH (20d) ---
-        range_win = g.iloc[-21:-1]
-        range_high = float(range_win["High"].max())
+        range_high = rng["range_high"]
+        range_low  = rng["range_low"]
 
-        # --- REJECTIONS ---
-        rejections = (range_win["High"] >= range_high * 0.995).sum()
-        if rejections < 2:
+        # ---------- BREAKOUT ----------
+        if not (float(last["Close"]) > range_high * (1 + BREAK_BUFFER)):
             continue
 
-        # --- BREAK & ACCEPT ---
-        entry = float(last["Close"])
-        if entry <= range_high:
+        # Anti-Chase
+        extension = (float(last["Close"]) - range_high) / range_high
+        if extension > MAX_EXTENSION:
             continue
 
-        rng = float(last["High"]) - float(last["Low"])
-        if rng <= 0:
-            continue
-
-        close_quality = entry >= float(last["Low"]) + 0.60 * rng
-        if not close_quality:
-            continue
-
-        stop = range_high
-        r_one = entry - stop
-        if r_one <= 0:
-            continue
-
-        reward = hi250 - entry
-        rr = reward / r_one
-        if rr < 2.5:
-            continue
-
-        # --- VOLUME ---
+        # ---------- VOLUME ----------
         vol_hist = g.iloc[-21:-1]["Volume"]
-        vol_med = float(vol_hist.median()) if len(vol_hist) >= 10 else 0.0
-        rvol20 = float(last["Volume"]) / vol_med if vol_med > 0 else 0.0
-        if rvol20 < 1.2:
+        if len(vol_hist) < 10:
             continue
 
-        spread = rng / entry
-        if spread > 0.06:
+        vol_med = float(vol_hist.median())
+        if vol_med <= 0:
             continue
 
-        score = compute_score(
-            rvol20,
-            rr,
-            close_quality,
-            spread
-        )
+        vol_mult = float(last["Volume"]) / vol_med
+        if vol_mult < MIN_VOL_MULT:
+            continue
+
+        # ---------- OUTPUT ----------
+        range_height = range_high - range_low
 
         rows.append({
             "symbol": sym,
             "date": str(last["date"]),
-            "open": round(float(last["Open"]), 2),
-            "high": round(float(last["High"]), 2),
-            "low": round(float(last["Low"]), 2),
-            "close": round(entry, 2),
+            "close": round(float(last["Close"]), 2),
             "range_high": round(range_high, 2),
-            "stop": round(stop, 2),
-            "hi250": round(hi250, 2),
-            "rr_to_hi250": round(rr, 2),
-            "rvol20": round(rvol20, 2),
-            "dollar_vol": round(entry * float(last["Volume"]), 0),
-            "rejections": int(rejections),
-            "score": score
+            "range_low": round(range_low, 2),
+            "range_width_pct": rng["range_pct"],
+            "lookback_days": rng["lookback"],
+            "volume_multiple": round(vol_mult, 2),
+            "entry_hint": round(range_high, 2),
+            "stop_loss": round(range_low, 2),
+            "tp1": round(range_high + range_height, 2),
+            "tp2": round(range_high + 2 * range_height, 2),
+            "setup": "B_RANGE_BREAKOUT"
         })
 
     os.makedirs("out", exist_ok=True)
 
-    if not rows:
-        empty = pd.DataFrame(columns=[
-            "rank","symbol","date","open","high","low","close",
-            "range_high","stop","hi250","rr_to_hi250",
-            "rvol20","dollar_vol","rejections","score"
-        ])
-        empty.to_csv(OUT_CSV, index=False)
-
+    out = pd.DataFrame(rows)
+    if out.empty:
+        out.to_csv(OUT_CSV, index=False)
         with open("out/summary.json", "w") as f:
             json.dump({
                 "version": "v1.3_setupB",
                 "hits": 0,
-                "note": "No CRC-style range acceptance breakouts"
+                "note": "No valid range breakouts"
             }, f, indent=2)
-
         print("Keine Treffer.")
         return
 
-    out = pd.DataFrame(rows)
-    out.sort_values(["score", "symbol"], ascending=[False, True], inplace=True)
+    out.sort_values(
+        ["volume_multiple", "range_width_pct"],
+        ascending=[False, True],
+        inplace=True
+    )
     out.insert(0, "rank", range(1, len(out) + 1))
     out.to_csv(OUT_CSV, index=False)
 
@@ -172,7 +163,8 @@ def main():
         json.dump({
             "version": "v1.3_setupB",
             "hits": int(len(out)),
-            "setup": "CRC Range Acceptance Breakout"
+            "setup": "Range Breakout with Acceptance",
+            "green_line": False
         }, f, indent=2)
 
     print(f"Done -> {OUT_CSV} | Hits={len(out)}")
