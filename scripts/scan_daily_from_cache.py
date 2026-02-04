@@ -1,134 +1,112 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – v1.3 SETUP B (FINAL)
+# PAL Daily Scan – v1.3 CRC FINAL
 #
-# Setup B:
-# - Breakout über Range-Deckel (implizit über hi250)
-# - Entry  = Close der Signalkerze
-# - Stop   = Low der Signalkerze
-# - Target = 2R
-# - Fixes Risiko pro Trade: 100 EUR
+# Setup:
+# - CRC / Range Breakout
+# - Lokaler Deckel (nicht hi250!)
+# - SL = Low der Signalkerze
+# - TP = 2R
+# - €-Sizing für 100 € Risiko
 #
-# Fokus: handelbare Trades wie CRC
+# Entry: Close(t0)
+# Stop : Low(t0)
+# Target: Entry + 2R
 
 import os
 import json
-import math
 import pandas as pd
 
-# ---------------- CONFIG ----------------
-LOOKBACK = 250
-RISK_EUR = 100.0
+LOOKBACK_TREND = 250
+LOOKBACK_RANGE = 40
+RISK_EUR = 100
 
 IN_CSV  = "data/levels_cache_250d.csv"
 OUT_CSV = "out/pal_hits_daily.csv"
 
-# ----------------------------------------
 
-def today_utc_date():
+def today_utc():
     return pd.Timestamp.utcnow().date()
 
 
 def main():
-    if not os.path.exists(IN_CSV):
-        raise SystemExit("❌ OHLCV-Cache fehlt")
-
     df = pd.read_csv(IN_CSV)
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-    df = df[df["date"] < today_utc_date()]
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df = df[df["date"] < today_utc()]
 
     rows = []
 
     for sym, g in df.groupby("symbol"):
         g = g.sort_values("date")
-
-        if len(g) < LOOKBACK + 5:
+        if len(g) < LOOKBACK_TREND + LOOKBACK_RANGE:
             continue
 
-        last = g.iloc[-1]   # Signalkerze (t0)
+        last = g.iloc[-1]     # signal candle
         prev = g.iloc[-2]
 
-        win = g.iloc[-(LOOKBACK + 1):-1]
-        hi250 = float(win["High"].max())
-        lo250 = float(win["Low"].min())
-        range250 = hi250 - lo250
-        if range250 <= 0:
+        trend_win = g.iloc[-(LOOKBACK_TREND + 1):-1]
+        hi250 = trend_win["High"].max()
+        lo250 = trend_win["Low"].min()
+
+        # --- Trendfilter ---
+        if prev["Close"] < hi250 * 0.75:
             continue
 
-        # --- BREAKOUT BEDINGUNG ---
+        # --- CRC Deckel ---
+        range_win = g.iloc[-(LOOKBACK_RANGE + 1):-1]
+        deckel = range_win["High"].max()
+
+        # Touches am Deckel
+        touches = (range_win["High"] >= deckel * 0.99).sum()
+        if touches < 2:
+            continue
+
+        # --- Breakout ---
         if not (
-            float(prev["Close"]) <= hi250 and
-            float(last["Close"]) > hi250
+            prev["Close"] <= deckel and
+            last["Close"] > deckel
         ):
             continue
 
-        entry = float(last["Close"])
-        stop  = float(last["Low"])
-        r_per_share = entry - stop
-        if r_per_share <= 0:
-            continue
-
-        # --- QUALITY FILTERS ---
-        rng = float(last["High"]) - float(last["Low"])
+        # --- Kerzenqualität ---
+        rng = last["High"] - last["Low"]
         if rng <= 0:
             continue
 
-        # Close stark (kein Docht-Exit)
-        if entry < float(last["Low"]) + 0.65 * rng:
+        if last["Close"] < last["Low"] + 0.7 * rng:
             continue
 
-        # Kein Micro-Break
-        if (entry - hi250) / range250 < 0.10:
+        entry = last["Close"]
+        stop = last["Low"]
+        r = entry - stop
+        if r <= 0:
             continue
 
-        # --- RISIKO- & POSITIONSGRÖSSE ---
-        shares = math.floor(RISK_EUR / r_per_share)
-        if shares <= 0:
-            continue
+        target = entry + 2 * r
 
-        capital_required = shares * entry
-        tp_price = entry + 2.0 * r_per_share
-        profit_at_tp = shares * (tp_price - entry)
-
-        # --- VOLUME INFO ---
-        vol_hist = g.iloc[-21:-1]["Volume"]
-        vol20_med = float(vol_hist.median()) if len(vol_hist) >= 10 else 0.0
-        rvol20 = float(last["Volume"]) / vol20_med if vol20_med > 0 else 0.0
-        dollar_vol = entry * float(last["Volume"])
+        # --- €-Sizing ---
+        shares = RISK_EUR / r
+        invest_eur = shares * entry
 
         rows.append({
             "symbol": sym,
             "date": str(last["date"]),
-
             "entry": round(entry, 2),
             "stop": round(stop, 2),
-            "tp_2r": round(tp_price, 2),
-
-            "r_per_share": round(r_per_share, 2),
-            "shares_for_100eur_risk": shares,
-            "capital_required_eur": round(capital_required, 0),
-            "profit_at_2r_eur": round(profit_at_tp, 0),
-
-            "hi250": round(hi250, 2),
-            "range250": round(range250, 2),
-
-            "rvol20": round(rvol20, 2),
-            "dollar_vol_today": round(dollar_vol, 0)
+            "target_2R": round(target, 2),
+            "risk_per_share": round(r, 2),
+            "shares_for_100eur": int(shares),
+            "invest_eur": round(invest_eur, 0),
+            "deckel": round(deckel, 2),
+            "hi250": round(hi250, 2)
         })
 
     out = pd.DataFrame(rows)
 
     if out.empty:
         print("Keine Treffer.")
-        # leere Datei bewusst NICHT schreiben
         return
 
-    # 🔥 Sinnvolle Sortierung
-    out.sort_values(
-        ["capital_required_eur", "rvol20"],
-        ascending=[True, False],
-        inplace=True
-    )
-
+    out.sort_values("invest_eur", inplace=True)
     out.insert(0, "rank", range(1, len(out) + 1))
 
     os.makedirs("out", exist_ok=True)
@@ -136,14 +114,14 @@ def main():
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.3_setup_B_final",
+            "version": "v1.3_crc_final",
             "hits": int(len(out)),
-            "risk_per_trade_eur": RISK_EUR,
-            "target_r": 2.0,
-            "stop_rule": "low_of_signal_candle"
+            "setup": "CRC",
+            "risk_eur": RISK_EUR,
+            "rr": "2R"
         }, f, indent=2)
 
-    print(f"✅ Done -> {OUT_CSV} | Hits={len(out)}")
+    print(f"Done -> {OUT_CSV} | Hits={len(out)}")
 
 
 if __name__ == "__main__":
