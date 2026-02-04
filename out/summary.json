@@ -1,6 +1,7 @@
 {
-  "version": "v1.3_setupB",
-  "hits": 27,
-  "setup": "Range Breakout with Acceptance",
-  "green_line": false
+  "version": "v1.3_setup_B_final",
+  "hits": 7,
+  "risk_per_trade_eur": 100.0,
+  "target_r": 2.0,
+  "stop_rule": "low_of_signal_candle"
 }
