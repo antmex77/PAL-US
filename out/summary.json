@@ -1,5 +1,6 @@
 {
   "version": "v1.3_setupB",
-  "hits": 21,
-  "setup": "CRC Range Acceptance Breakout"
+  "hits": 27,
+  "setup": "Range Breakout with Acceptance",
+  "green_line": false
 }
