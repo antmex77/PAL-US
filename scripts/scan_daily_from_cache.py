@@ -1,27 +1,14 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – Version 1.3 (SETUP B FINAL)
+# PAL Daily Range Breakout – Version 1.3 (Setup B)
 #
 # Fokus:
-# - Range / Deckel Breakouts wie CRC
+# - Akzeptierter Range-Breakout
 # - Kein Fib / keine grüne Linie
-# - Struktur > Volumen
+# - Realistisches Trade-Management (2R)
 #
-# ENTRY : Close(t0)
-# STOP  : Low(t0)
-#
-# HARD GATES:
-# - Bullische Tageskerze
-# - Close in oberen 70 % der Range
-# - Range-Breakout (Close > hi250)
-# - Mindest-Range relativ zur 250d-Range
-# - RR bis hi250-Extension >= 2.5
-#
-# SORTIERUNG (wichtig!):
-# 1) room_to_high_r   (absteigend)
-# 2) gap_strength     (absteigend)
-# 3) extension_r     (aufsteigend)
-# 4) rvol20           (absteigend)
-# 5) score            (absteigend)
+# ENTRY : Close der Signalkerze (t0)
+# STOP  : Low der Signalkerze (t0)
+# TP    : 2R (rein informativ, kein Gate)
 
 import os
 import json
@@ -34,24 +21,7 @@ OUT_CSV = "out/pal_hits_daily.csv"
 
 
 def today_utc_date():
-    return pd.Timestamp.now("UTC").date()
-
-
-def compute_score(rvol20, room_to_high_r, extension_r, close_quality, spread_est):
-    s = 0.0
-
-    s += 35.0 * min(rvol20 / 3.0, 1.0)
-    s += 45.0 * min(room_to_high_r / 3.0, 1.0)
-
-    if close_quality:
-        s += 10.0
-
-    if extension_r > 1.0:
-        s -= min((extension_r - 1.0) * 20.0, 30.0)
-
-    s -= min(spread_est * 120.0, 10.0)
-
-    return round(max(0.0, min(100.0, s)), 2)
+    return pd.Timestamp.utcnow().date()
 
 
 def main():
@@ -70,6 +40,7 @@ def main():
             continue
 
         last = g.iloc[-1]   # t0
+        prev = g.iloc[-2]   # t-1
 
         win = g.iloc[-(LOOKBACK + 1):-1]
         hi250 = float(win["High"].max())
@@ -79,73 +50,64 @@ def main():
             continue
 
         # --- RANGE BREAKOUT ---
-        if float(last["Close"]) <= hi250:
+        if not (
+            float(prev["Close"]) <= hi250 and
+            float(last["Close"]) > hi250
+        ):
             continue
 
+        # --- ACCEPTANCE ---
         entry_px = float(last["Close"])
-        stop_px  = float(last["Low"])
+        open_px  = float(last["Open"])
+        low_px   = float(last["Low"])
+        high_px  = float(last["High"])
+
+        rng = high_px - low_px
+        if rng <= 0:
+            continue
+
+        # Close stark & oben
+        if not (
+            entry_px >= open_px and
+            entry_px >= low_px + 0.70 * rng
+        ):
+            continue
+
+        # --- R / SL / TP ---
+        stop_px = low_px
         r_one = entry_px - stop_px
         if r_one <= 0:
             continue
 
-        # --- ACCEPTANCE ---
-        rng = float(last["High"]) - float(last["Low"])
-        if rng <= 0:
-            continue
+        tp_2r = entry_px + 2.0 * r_one
+        tp_3r = entry_px + 3.0 * r_one
 
-        close_quality = (
-            entry_px >= float(last["Open"]) and
-            entry_px >= (float(last["Low"]) + 0.70 * rng)
-        )
-        if not close_quality:
-            continue
-
-        # --- BREAK STRENGTH ---
-        gap_strength = (entry_px - hi250) / range250
-        if gap_strength < 0.10:
-            continue
-
-        # --- RR GATE ---
-        projected_high = hi250 + range250
-        reward = projected_high - entry_px
-        rr = reward / r_one
-        if rr < 2.5:
-            continue
-
-        # --- VOLUME ---
+        # --- VOLUME (Info) ---
         vol_hist = g.iloc[-21:-1]["Volume"]
         vol20_med = float(vol_hist.median()) if len(vol_hist) >= 10 else 0.0
         rvol20 = float(last["Volume"]) / vol20_med if vol20_med > 0 else 0.0
         dollar_vol = entry_px * float(last["Volume"])
 
-        extension_r = (entry_px - hi250) / r_one
-        room_to_high_r = reward / r_one
-        spread_est = rng / entry_px
-
-        score = compute_score(
-            rvol20,
-            room_to_high_r,
-            extension_r,
-            close_quality,
-            spread_est
-        )
-
         rows.append({
             "symbol": sym,
             "date": str(last["date"]),
-            "open": round(float(last["Open"]), 2),
-            "high": round(float(last["High"]), 2),
-            "low": round(float(last["Low"]), 2),
+            "open": round(open_px, 2),
+            "high": round(high_px, 2),
+            "low": round(low_px, 2),
             "close": round(entry_px, 2),
-            "hi250": round(hi250, 2),
-            "stop_low": round(stop_px, 2),
-            "rr_to_target": round(rr, 2),
-            "gap_strength": round(gap_strength, 3),
-            "extension_r": round(extension_r, 2),
-            "room_to_high_r": round(room_to_high_r, 2),
+
+            "range_hi_250": round(hi250, 2),
+            "range_lo_250": round(lo250, 2),
+
+            "entry": round(entry_px, 2),
+            "stop": round(stop_px, 2),
+            "r": round(r_one, 2),
+            "tp_2r": round(tp_2r, 2),
+            "tp_3r": round(tp_3r, 2),
+
             "rvol20": round(rvol20, 2),
             "dollar_vol_today": round(dollar_vol, 0),
-            "score": score,
+
             "setup": "B_RANGE_BREAKOUT"
         })
 
@@ -154,10 +116,12 @@ def main():
         print("Keine Treffer.")
         return
 
-    # 🔥 SETUP-B SORTIERUNG
+    # Sinnvolle Sortierung:
+    # 1) rvol
+    # 2) Dollar-Volumen
     out.sort_values(
-        ["room_to_high_r", "gap_strength", "extension_r", "rvol20", "score"],
-        ascending=[False, False, True, False, False],
+        ["rvol20", "dollar_vol_today"],
+        ascending=[False, False],
         inplace=True
     )
 
@@ -168,10 +132,12 @@ def main():
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.3_setup_B_final",
+            "version": "v1.3_setup_B",
             "hits": int(len(out)),
-            "setup": "B_RANGE_BREAKOUT",
-            "sort_logic": "room > strength > extension > volume"
+            "entry": "close_t0",
+            "stop": "low_t0",
+            "tp_info": "2R / 3R",
+            "fib_used": False
         }, f, indent=2)
 
     print(f"Done -> {OUT_CSV} | Hits={len(out)}")
