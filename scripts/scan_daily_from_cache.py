@@ -1,79 +1,62 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – v1.3 (SETUP B ONLY)
+# PAL Daily Scan – Version 1.3 (SETUP B FINAL)
 #
-# SETUP B:
-# Range Breakout with Acceptance
-# - Mehrfach getestete Range-Highs
-# - Echter Close-Break
-# - Volumen-Bestätigung
+# Fokus:
+# - Range / Deckel Breakouts wie CRC
+# - Kein Fib / keine grüne Linie
+# - Struktur > Volumen
 #
-# KEIN:
-# - Base / grüne Linie
-# - Moving Averages
-# - Trend-Fortsetzung
+# ENTRY : Close(t0)
+# STOP  : Low(t0)
 #
-# Ziel: Trades wie CRC, SNDA, AAPL (Aug)
+# HARD GATES:
+# - Bullische Tageskerze
+# - Close in oberen 70 % der Range
+# - Range-Breakout (Close > hi250)
+# - Mindest-Range relativ zur 250d-Range
+# - RR bis hi250-Extension >= 2.5
+#
+# SORTIERUNG (wichtig!):
+# 1) room_to_high_r   (absteigend)
+# 2) gap_strength     (absteigend)
+# 3) extension_r     (aufsteigend)
+# 4) rvol20           (absteigend)
+# 5) score            (absteigend)
 
 import os
 import json
 import pandas as pd
 
-# ---------------- CONFIG ----------------
-LOOKBACK_MIN = 20
-LOOKBACK_MAX = 60
-MAX_RANGE_PCT = 0.18      # max 18 % Range
-HIGH_TOL = 0.005          # 0.5 % Toleranz für Range-High-Tests
-BREAK_BUFFER = 0.002      # 0.2 % echter Break
-MAX_EXTENSION = 0.06      # Anti-Chase
-MIN_VOL_MULT = 1.3
+LOOKBACK = int(os.getenv("LOOKBACK", "250"))
 
 IN_CSV  = "data/levels_cache_250d.csv"
 OUT_CSV = "out/pal_hits_daily.csv"
 
-# ----------------------------------------
-
 
 def today_utc_date():
-    return pd.Timestamp.utcnow().date()
+    return pd.Timestamp.now("UTC").date()
 
 
-def find_range(g):
-    """
-    Sucht eine valide Range im Fenster 20–60 Tage
-    """
-    for lb in range(LOOKBACK_MAX, LOOKBACK_MIN - 1, -1):
-        win = g.iloc[-(lb + 1):-1]  # bis t-1
-        hi = float(win["High"].max())
-        lo = float(win["Low"].min())
-        if lo <= 0:
-            continue
+def compute_score(rvol20, room_to_high_r, extension_r, close_quality, spread_est):
+    s = 0.0
 
-        range_pct = (hi - lo) / lo
-        if range_pct > MAX_RANGE_PCT:
-            continue
+    s += 35.0 * min(rvol20 / 3.0, 1.0)
+    s += 45.0 * min(room_to_high_r / 3.0, 1.0)
 
-        # Wie oft wurde das RangeHigh getestet?
-        tests = win[abs(win["High"] - hi) / hi <= HIGH_TOL]
-        if len(tests) < 3:
-            continue
+    if close_quality:
+        s += 10.0
 
-        # Kein vorheriger Close über RangeHigh
-        if (win["Close"] > hi).any():
-            continue
+    if extension_r > 1.0:
+        s -= min((extension_r - 1.0) * 20.0, 30.0)
 
-        return {
-            "range_high": hi,
-            "range_low": lo,
-            "range_pct": round(range_pct, 3),
-            "lookback": lb
-        }
+    s -= min(spread_est * 120.0, 10.0)
 
-    return None
+    return round(max(0.0, min(100.0, s)), 2)
 
 
 def main():
     if not os.path.exists(IN_CSV):
-        raise SystemExit("❌ OHLCV-Cache fehlt")
+        raise SystemExit("OHLCV-Cache fehlt")
 
     df = pd.read_csv(IN_CSV)
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
@@ -83,88 +66,112 @@ def main():
 
     for sym, g in df.groupby("symbol"):
         g = g.sort_values("date")
-        if len(g) < LOOKBACK_MAX + 5:
+        if len(g) < LOOKBACK + 5:
             continue
 
         last = g.iloc[-1]   # t0
-        prev = g.iloc[-2]   # t-1
 
-        rng = find_range(g)
-        if not rng:
+        win = g.iloc[-(LOOKBACK + 1):-1]
+        hi250 = float(win["High"].max())
+        lo250 = float(win["Low"].min())
+        range250 = hi250 - lo250
+        if range250 <= 0:
             continue
 
-        range_high = rng["range_high"]
-        range_low  = rng["range_low"]
-
-        # ---------- BREAKOUT ----------
-        if not (float(last["Close"]) > range_high * (1 + BREAK_BUFFER)):
+        # --- RANGE BREAKOUT ---
+        if float(last["Close"]) <= hi250:
             continue
 
-        # Anti-Chase
-        extension = (float(last["Close"]) - range_high) / range_high
-        if extension > MAX_EXTENSION:
+        entry_px = float(last["Close"])
+        stop_px  = float(last["Low"])
+        r_one = entry_px - stop_px
+        if r_one <= 0:
             continue
 
-        # ---------- VOLUME ----------
+        # --- ACCEPTANCE ---
+        rng = float(last["High"]) - float(last["Low"])
+        if rng <= 0:
+            continue
+
+        close_quality = (
+            entry_px >= float(last["Open"]) and
+            entry_px >= (float(last["Low"]) + 0.70 * rng)
+        )
+        if not close_quality:
+            continue
+
+        # --- BREAK STRENGTH ---
+        gap_strength = (entry_px - hi250) / range250
+        if gap_strength < 0.10:
+            continue
+
+        # --- RR GATE ---
+        projected_high = hi250 + range250
+        reward = projected_high - entry_px
+        rr = reward / r_one
+        if rr < 2.5:
+            continue
+
+        # --- VOLUME ---
         vol_hist = g.iloc[-21:-1]["Volume"]
-        if len(vol_hist) < 10:
-            continue
+        vol20_med = float(vol_hist.median()) if len(vol_hist) >= 10 else 0.0
+        rvol20 = float(last["Volume"]) / vol20_med if vol20_med > 0 else 0.0
+        dollar_vol = entry_px * float(last["Volume"])
 
-        vol_med = float(vol_hist.median())
-        if vol_med <= 0:
-            continue
+        extension_r = (entry_px - hi250) / r_one
+        room_to_high_r = reward / r_one
+        spread_est = rng / entry_px
 
-        vol_mult = float(last["Volume"]) / vol_med
-        if vol_mult < MIN_VOL_MULT:
-            continue
-
-        # ---------- OUTPUT ----------
-        range_height = range_high - range_low
+        score = compute_score(
+            rvol20,
+            room_to_high_r,
+            extension_r,
+            close_quality,
+            spread_est
+        )
 
         rows.append({
             "symbol": sym,
             "date": str(last["date"]),
-            "close": round(float(last["Close"]), 2),
-            "range_high": round(range_high, 2),
-            "range_low": round(range_low, 2),
-            "range_width_pct": rng["range_pct"],
-            "lookback_days": rng["lookback"],
-            "volume_multiple": round(vol_mult, 2),
-            "entry_hint": round(range_high, 2),
-            "stop_loss": round(range_low, 2),
-            "tp1": round(range_high + range_height, 2),
-            "tp2": round(range_high + 2 * range_height, 2),
+            "open": round(float(last["Open"]), 2),
+            "high": round(float(last["High"]), 2),
+            "low": round(float(last["Low"]), 2),
+            "close": round(entry_px, 2),
+            "hi250": round(hi250, 2),
+            "stop_low": round(stop_px, 2),
+            "rr_to_target": round(rr, 2),
+            "gap_strength": round(gap_strength, 3),
+            "extension_r": round(extension_r, 2),
+            "room_to_high_r": round(room_to_high_r, 2),
+            "rvol20": round(rvol20, 2),
+            "dollar_vol_today": round(dollar_vol, 0),
+            "score": score,
             "setup": "B_RANGE_BREAKOUT"
         })
 
-    os.makedirs("out", exist_ok=True)
-
     out = pd.DataFrame(rows)
     if out.empty:
-        out.to_csv(OUT_CSV, index=False)
-        with open("out/summary.json", "w") as f:
-            json.dump({
-                "version": "v1.3_setupB",
-                "hits": 0,
-                "note": "No valid range breakouts"
-            }, f, indent=2)
         print("Keine Treffer.")
         return
 
+    # 🔥 SETUP-B SORTIERUNG
     out.sort_values(
-        ["volume_multiple", "range_width_pct"],
-        ascending=[False, True],
+        ["room_to_high_r", "gap_strength", "extension_r", "rvol20", "score"],
+        ascending=[False, False, True, False, False],
         inplace=True
     )
+
     out.insert(0, "rank", range(1, len(out) + 1))
+
+    os.makedirs("out", exist_ok=True)
     out.to_csv(OUT_CSV, index=False)
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.3_setupB",
+            "version": "v1.3_setup_B_final",
             "hits": int(len(out)),
-            "setup": "Range Breakout with Acceptance",
-            "green_line": False
+            "setup": "B_RANGE_BREAKOUT",
+            "sort_logic": "room > strength > extension > volume"
         }, f, indent=2)
 
     print(f"Done -> {OUT_CSV} | Hits={len(out)}")
