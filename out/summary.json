@@ -1,7 +1,6 @@
 {
-  "version": "v1.3_crc_final",
-  "hits": 113,
-  "setup": "CRC",
-  "risk_eur": 100,
-  "rr": "2R"
+  "version": "v1.3.1_CRC_STRICT",
+  "hits": 34,
+  "risk_model": "SL=SignalLow, TP=2R",
+  "max_invest": 4000
 }
