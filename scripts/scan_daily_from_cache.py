@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – v1.3 CRC FINAL
-#
-# Setup:
-# - CRC / Range Breakout
-# - Lokaler Deckel (nicht hi250!)
-# - SL = Low der Signalkerze
-# - TP = 2R
-# - €-Sizing für 100 € Risiko
-#
-# Entry: Close(t0)
-# Stop : Low(t0)
-# Target: Entry + 2R
+# PAL Daily Scan – v1.3.1 CRC-STRICT
+# Fokus: echte CRC-Range-Breakouts
 
 import os
 import json
 import pandas as pd
-
-LOOKBACK_TREND = 250
-LOOKBACK_RANGE = 40
-RISK_EUR = 100
+import numpy as np
 
 IN_CSV  = "data/levels_cache_250d.csv"
 OUT_CSV = "out/pal_hits_daily.csv"
 
+LOOKBACK_RANGE = 40
+LOOKBACK_VOL   = 20
+RISK_EUR       = 100
+MAX_INVEST     = 4000
+MIN_RISK_SHARE = 0.8
+
 
 def today_utc():
-    return pd.Timestamp.utcnow().date()
+    return pd.Timestamp.now("UTC").date()
 
 
 def main():
+    if not os.path.exists(IN_CSV):
+        raise SystemExit("Cache fehlt")
+
     df = pd.read_csv(IN_CSV)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = df[df["date"] < today_utc()]
@@ -37,76 +33,78 @@ def main():
 
     for sym, g in df.groupby("symbol"):
         g = g.sort_values("date")
-        if len(g) < LOOKBACK_TREND + LOOKBACK_RANGE:
+        if len(g) < LOOKBACK_RANGE + LOOKBACK_VOL + 5:
             continue
 
-        last = g.iloc[-1]     # signal candle
-        prev = g.iloc[-2]
+        t0 = g.iloc[-1]
+        hist = g.iloc[-(LOOKBACK_RANGE + 1):-1]
 
-        trend_win = g.iloc[-(LOOKBACK_TREND + 1):-1]
-        hi250 = trend_win["High"].max()
-        lo250 = trend_win["Low"].min()
+        deckel = hist["High"].max()
+        boden  = hist["Low"].min()
+        range_pct = (deckel - boden) / deckel
 
-        # --- Trendfilter ---
-        if prev["Close"] < hi250 * 0.75:
+        if range_pct < 0.06:
             continue
 
-        # --- CRC Deckel ---
-        range_win = g.iloc[-(LOOKBACK_RANGE + 1):-1]
-        deckel = range_win["High"].max()
-
-        # Touches am Deckel
-        touches = (range_win["High"] >= deckel * 0.99).sum()
+        touches = np.sum(np.abs(hist["High"] - deckel) / deckel < 0.003)
         if touches < 2:
             continue
 
-        # --- Breakout ---
-        if not (
-            prev["Close"] <= deckel and
-            last["Close"] > deckel
-        ):
+        if t0["Close"] <= deckel:
             continue
 
-        # --- Kerzenqualität ---
-        rng = last["High"] - last["Low"]
+        rng = t0["High"] - t0["Low"]
         if rng <= 0:
             continue
 
-        if last["Close"] < last["Low"] + 0.7 * rng:
+        close_quality = (t0["Close"] - t0["Low"]) / rng
+        if close_quality < 0.6 or t0["Close"] <= t0["Open"]:
             continue
 
-        entry = last["Close"]
-        stop = last["Low"]
-        r = entry - stop
-        if r <= 0:
+        med_rng = (g.iloc[-(LOOKBACK_VOL+1):-1]["High"] -
+                   g.iloc[-(LOOKBACK_VOL+1):-1]["Low"]).median()
+        if rng < 1.2 * med_rng:
             continue
 
-        target = entry + 2 * r
+        entry = float(t0["Close"])
+        stop  = float(t0["Low"])
+        risk_per_share = entry - stop
+        if risk_per_share < MIN_RISK_SHARE:
+            continue
 
-        # --- €-Sizing ---
-        shares = RISK_EUR / r
-        invest_eur = shares * entry
+        shares = int(RISK_EUR / risk_per_share)
+        invest = shares * entry
+        if invest > MAX_INVEST or shares <= 0:
+            continue
+
+        target_2r = entry + 2 * risk_per_share
 
         rows.append({
             "symbol": sym,
-            "date": str(last["date"]),
+            "date": str(t0["date"]),
             "entry": round(entry, 2),
             "stop": round(stop, 2),
-            "target_2R": round(target, 2),
-            "risk_per_share": round(r, 2),
-            "shares_for_100eur": int(shares),
-            "invest_eur": round(invest_eur, 0),
+            "target_2R": round(target_2r, 2),
+            "risk_per_share": round(risk_per_share, 2),
+            "shares_for_100eur": shares,
+            "invest_eur": round(invest, 0),
             "deckel": round(deckel, 2),
-            "hi250": round(hi250, 2)
+            "hi250": round(g.iloc[-251:-1]["High"].max(), 2)
         })
 
     out = pd.DataFrame(rows)
-
     if out.empty:
-        print("Keine Treffer.")
+        print("Keine CRC-STRICT Treffer.")
         return
 
-    out.sort_values("invest_eur", inplace=True)
+    out["deckel_break_pct"] = (out["entry"] - out["deckel"]) / out["deckel"]
+
+    out.sort_values(
+        by=["risk_per_share", "deckel_break_pct"],
+        ascending=[False, False],
+        inplace=True
+    )
+
     out.insert(0, "rank", range(1, len(out) + 1))
 
     os.makedirs("out", exist_ok=True)
@@ -114,14 +112,13 @@ def main():
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.3_crc_final",
+            "version": "v1.3.1_CRC_STRICT",
             "hits": int(len(out)),
-            "setup": "CRC",
-            "risk_eur": RISK_EUR,
-            "rr": "2R"
+            "risk_model": "SL=SignalLow, TP=2R",
+            "max_invest": MAX_INVEST
         }, f, indent=2)
 
-    print(f"Done -> {OUT_CSV} | Hits={len(out)}")
+    print(f"Done → {OUT_CSV} | Hits={len(out)}")
 
 
 if __name__ == "__main__":
