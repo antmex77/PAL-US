@@ -1,6 +1,7 @@
 {
-  "version": "v1.3.1_CRC_STRICT",
-  "hits": 34,
+  "version": "v1.4_GREEN_LINE_RECLAIM_80D",
+  "hits": 1,
+  "min_days_below_green": 80,
   "risk_model": "SL=SignalLow, TP=2R",
   "max_invest": 4000
 }
