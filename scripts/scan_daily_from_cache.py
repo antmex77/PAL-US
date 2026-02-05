@@ -10,7 +10,7 @@ import numpy as np
 IN_CSV  = "data/levels_cache_250d.csv"
 OUT_CSV = "out/pal_hits_daily.csv"
 
-LOOKBACK_RANGE = 40
+LOOKBACK_RANGE = 100
 LOOKBACK_VOL   = 20
 RISK_EUR       = 100
 MAX_INVEST     = 4000
