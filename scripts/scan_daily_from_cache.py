@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – v1.3.1 CRC-STRICT
-# Fokus: echte CRC-Range-Breakouts
+# PAL Daily Scan – v1.3.2 CRC-STRICT-PLUS
+# Fokus: echte CRC-Range-Breakouts (maximale Selektion)
 
 import os
 import json
@@ -39,33 +39,47 @@ def main():
         t0 = g.iloc[-1]
         hist = g.iloc[-(LOOKBACK_RANGE + 1):-1]
 
-        deckel = hist["High"].max()
+        # --- CRC Deckel (streng) ---
+        top_highs = hist["High"].nlargest(5)
+        deckel = top_highs.median()
         boden  = hist["Low"].min()
         range_pct = (deckel - boden) / deckel
 
         if range_pct < 0.06:
             continue
 
-        touches = np.sum(np.abs(hist["High"] - deckel) / deckel < 0.003)
-        if touches < 2:
+        touches = np.sum(np.abs(hist["High"] - deckel) / deckel < 0.002)
+        if touches < 3:
             continue
 
         if t0["Close"] <= deckel:
             continue
 
+        # --- Kompression ---
+        ranges = hist["High"] - hist["Low"]
+        atr14 = ranges.rolling(14).mean().iloc[-1]
+
+        if atr14 / t0["Close"] > 0.02:
+            continue
+
+        if ranges.tail(5).max() > 1.2 * atr14:
+            continue
+
+        # --- Breakout Kerze ---
         rng = t0["High"] - t0["Low"]
         if rng <= 0:
             continue
 
         close_quality = (t0["Close"] - t0["Low"]) / rng
-        if close_quality < 0.6 or t0["Close"] <= t0["Open"]:
+        if close_quality < 0.7 or t0["Close"] <= t0["Open"]:
             continue
 
         med_rng = (g.iloc[-(LOOKBACK_VOL+1):-1]["High"] -
                    g.iloc[-(LOOKBACK_VOL+1):-1]["Low"]).median()
-        if rng < 1.2 * med_rng:
+        if rng < 1.5 * med_rng:
             continue
 
+        # --- Risk ---
         entry = float(t0["Close"])
         stop  = float(t0["Low"])
         risk_per_share = entry - stop
@@ -94,13 +108,13 @@ def main():
 
     out = pd.DataFrame(rows)
     if out.empty:
-        print("Keine CRC-STRICT Treffer.")
+        print("Keine CRC-STRICT-PLUS Treffer.")
         return
 
     out["deckel_break_pct"] = (out["entry"] - out["deckel"]) / out["deckel"]
 
     out.sort_values(
-        by=["risk_per_share", "deckel_break_pct"],
+        by=["deckel_break_pct", "risk_per_share"],
         ascending=[False, False],
         inplace=True
     )
@@ -112,7 +126,7 @@ def main():
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.3.1_CRC_STRICT",
+            "version": "v1.3.2_CRC_STRICT_PLUS",
             "hits": int(len(out)),
             "risk_model": "SL=SignalLow, TP=2R",
             "max_invest": MAX_INVEST
