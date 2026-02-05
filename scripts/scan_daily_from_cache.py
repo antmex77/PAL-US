@@ -11,7 +11,7 @@ IN_CSV  = "data/levels_cache_250d.csv"
 OUT_CSV = "out/pal_hits_daily.csv"
 
 LOOKBACK_RANGE = 100
-LOOKBACK_VOL   = 20
+LOOKBACK_VOL   = 100
 RISK_EUR       = 100
 MAX_INVEST     = 4000
 MIN_RISK_SHARE = 0.8
