@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – v1.3.2 CRC-STRICT-PLUS
-# Fokus: echte CRC-Range-Breakouts (maximale Selektion)
+# PAL Daily Scan – v1.4 GREEN_LINE_RECLAIM_80D
+# Fokus: echte CRC-Regime-Shifts über dynamische grüne Linie (Fib .382 inverted)
 
 import os
 import json
 import pandas as pd
 import numpy as np
 
+# =========================
+# SETTINGS
+# =========================
+LOOKBACK            = 250
+MIN_DAYS_BELOW_LINE = 80
+RISK_EUR            = 100
+MAX_INVEST_EUR      = 4000
+
 IN_CSV  = "data/levels_cache_250d.csv"
 OUT_CSV = "out/pal_hits_daily.csv"
 
-LOOKBACK_RANGE = 100
-LOOKBACK_VOL   = 100
-RISK_EUR       = 100
-MAX_INVEST     = 4000
-MIN_RISK_SHARE = 0.8
-
 
 def today_utc():
-    return pd.Timestamp.now("UTC").date()
+    return pd.Timestamp.utcnow().date()
 
 
 def main():
@@ -26,95 +28,122 @@ def main():
         raise SystemExit("Cache fehlt")
 
     df = pd.read_csv(IN_CSV)
-    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
     df = df[df["date"] < today_utc()]
 
     rows = []
 
     for sym, g in df.groupby("symbol"):
         g = g.sort_values("date")
-        if len(g) < LOOKBACK_RANGE + LOOKBACK_VOL + 5:
+        if len(g) < LOOKBACK + 30:
             continue
 
-        t0 = g.iloc[-1]
-        hist = g.iloc[-(LOOKBACK_RANGE + 1):-1]
+        last = g.iloc[-1]
+        hist = g.iloc[-(LOOKBACK + 1):-1]
 
-        # --- CRC Deckel (streng) ---
-        top_highs = hist["High"].nlargest(5)
-        deckel = top_highs.median()
-        boden  = hist["Low"].min()
-        range_pct = (deckel - boden) / deckel
-
-        if range_pct < 0.06:
+        # =========================
+        # GREEN LINE (inverted Fib .382)
+        # =========================
+        hi = hist["High"].max()
+        lo = hist["Low"].min()
+        if hi <= lo:
             continue
 
-        touches = np.sum(np.abs(hist["High"] - deckel) / deckel < 0.002)
-        if touches < 3:
+        green_line = hi - 0.382 * (hi - lo)
+
+        # =========================
+        # TIME FILTER: days below green line
+        # =========================
+        days_below = 0
+        for i in range(len(hist) - 1, -1, -1):
+            if hist.iloc[i]["Close"] < green_line:
+                days_below += 1
+            else:
+                break
+
+        if days_below < MIN_DAYS_BELOW_LINE:
             continue
 
-        if t0["Close"] <= deckel:
+        # =========================
+        # STRUCTURAL RECLAIM
+        # =========================
+        entry = float(last["Close"])
+        if entry <= green_line:
             continue
 
-        # --- Kompression ---
-        ranges = hist["High"] - hist["Low"]
-        atr14 = ranges.rolling(14).mean().iloc[-1]
-
-        if atr14 / t0["Close"] > 0.02:
-            continue
-
-        if ranges.tail(5).max() > 1.2 * atr14:
-            continue
-
-        # --- Breakout Kerze ---
-        rng = t0["High"] - t0["Low"]
+        rng = float(last["High"]) - float(last["Low"])
         if rng <= 0:
             continue
 
-        close_quality = (t0["Close"] - t0["Low"]) / rng
-        if close_quality < 0.7 or t0["Close"] <= t0["Open"]:
+        close_quality = (
+            entry > float(last["Open"]) and
+            entry >= float(last["Low"]) + 0.65 * rng
+        )
+        if not close_quality:
             continue
 
-        med_rng = (g.iloc[-(LOOKBACK_VOL+1):-1]["High"] -
-                   g.iloc[-(LOOKBACK_VOL+1):-1]["Low"]).median()
-        if rng < 1.5 * med_rng:
+        # No spike
+        if entry > green_line + 0.6 * rng:
             continue
 
-        # --- Risk ---
-        entry = float(t0["Close"])
-        stop  = float(t0["Low"])
+        # =========================
+        # RISK MODEL
+        # =========================
+        stop = float(last["Low"])
         risk_per_share = entry - stop
-        if risk_per_share < MIN_RISK_SHARE:
+        if risk_per_share <= 0:
             continue
 
         shares = int(RISK_EUR / risk_per_share)
         invest = shares * entry
-        if invest > MAX_INVEST or shares <= 0:
+
+        if shares <= 0 or invest > MAX_INVEST_EUR:
             continue
 
         target_2r = entry + 2 * risk_per_share
 
+        # =========================
+        # ROOM TO 250D HIGH
+        # =========================
+        hi250 = hist["High"].max()
+        reward = hi250 - entry
+        rr = reward / risk_per_share
+        if rr < 2.5:
+            continue
+
+        # =========================
+        # VOLUME CONFIRMATION
+        # =========================
+        vol_hist = g.iloc[-21:-1]["Volume"]
+        if len(vol_hist) < 10:
+            continue
+
+        rvol20 = float(last["Volume"]) / float(vol_hist.median())
+        if rvol20 < 1.2:
+            continue
+
         rows.append({
             "symbol": sym,
-            "date": str(t0["date"]),
+            "date": str(last["date"]),
             "entry": round(entry, 2),
             "stop": round(stop, 2),
             "target_2R": round(target_2r, 2),
             "risk_per_share": round(risk_per_share, 2),
             "shares_for_100eur": shares,
             "invest_eur": round(invest, 0),
-            "deckel": round(deckel, 2),
-            "hi250": round(g.iloc[-251:-1]["High"].max(), 2)
+            "green_line": round(green_line, 2),
+            "days_below_green": days_below,
+            "rr_to_250d_high": round(rr, 2),
+            "rvol20": round(rvol20, 2)
         })
 
     out = pd.DataFrame(rows)
     if out.empty:
-        print("Keine CRC-STRICT-PLUS Treffer.")
+        print("Keine Treffer.")
         return
 
-    out["deckel_break_pct"] = (out["entry"] - out["deckel"]) / out["deckel"]
-
     out.sort_values(
-        by=["deckel_break_pct", "risk_per_share"],
+        by=["days_below_green", "rvol20"],
         ascending=[False, False],
         inplace=True
     )
@@ -126,10 +155,11 @@ def main():
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.3.2_CRC_STRICT_PLUS",
+            "version": "v1.4_GREEN_LINE_RECLAIM_80D",
             "hits": int(len(out)),
+            "min_days_below_green": MIN_DAYS_BELOW_LINE,
             "risk_model": "SL=SignalLow, TP=2R",
-            "max_invest": MAX_INVEST
+            "max_invest": MAX_INVEST_EUR
         }, f, indent=2)
 
     print(f"Done → {OUT_CSV} | Hits={len(out)}")
