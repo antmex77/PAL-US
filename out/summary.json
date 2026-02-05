@@ -1,7 +1,7 @@
 {
-  "version": "v1.3_setup_B_final",
-  "hits": 7,
-  "risk_per_trade_eur": 100.0,
-  "target_r": 2.0,
-  "stop_rule": "low_of_signal_candle"
+  "version": "v1.3_crc_final",
+  "hits": 113,
+  "setup": "CRC",
+  "risk_eur": 100,
+  "rr": "2R"
 }
