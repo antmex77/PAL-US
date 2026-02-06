@@ -24,9 +24,3 @@ jobs:
       - name: Run PLTR replay
         run: |
           python scripts/pltr_replay_v16_strict.py
-
-      - name: Upload replay output
-        uses: actions/upload-artifact@v4
-        with:
-        name: pltr-replay
-        path: out/pltr_replay_v16.csv
