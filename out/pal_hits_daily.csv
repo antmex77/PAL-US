@@ -1,2 +1,3 @@
 rank,symbol,date,entry,stop,target_2R,risk_per_share,shares_for_100eur,invest_eur,green_line,days_below_green,rr_to_250d_high,rvol20
-1,BNTGY,2026-02-04,13.37,13.02,14.07,0.35,285,3810.0,13.18,132,4.14,1.76
+1,DVA,2026-02-05,149.22,142.51,162.64,6.71,14,2089.0,148.82,135,4.35,2.37
+2,VVV,2026-02-05,36.76,35.57,39.14,1.19,84,3088.0,36.43,89,3.84,2.09
