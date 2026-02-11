@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – v1.6 CRC-STRICT
+# PAL Daily Scan – v1.6.1 CRC-STRUCTURAL
 #
-# Ziel:
-# Echte Regime-Wechsel nach bearish Reset + Akkumulation
-# .382 (grüne Linie) = Gate, NICHT Signal
-#
-# OHLCV-only, keine externen Daten
+# Reset → Akkumulation → Supply Dry → .382 Gate Break
+# OHLCV only
 
 import os
 import json
@@ -17,7 +14,8 @@ OUT_CSV = "out/pal_hits_daily.csv"
 
 # ---------------- CONFIG ----------------
 LOOKBACK_TOTAL      = 250
-MIN_DAYS_BELOW_FIB  = 80          # steuerbar
+MIN_DAYS_BELOW_FIB  = 80
+RESET_LOOKBACK      = 120
 ATR_LEN             = 14
 VOL_LEN             = 20
 RISK_EUR            = 100
@@ -57,29 +55,34 @@ def main():
         t0 = g.iloc[-1]
         hist = g.iloc[-(LOOKBACK_TOTAL+1):-1]
 
-        # === GREEN LINE (.382 inverted fib, unverändert gedacht) ===
+        # === GREEN LINE (.382 unverändert) ===
         hi = hist["High"].max()
         lo = hist["Low"].min()
         green_line = hi - 0.382 * (hi - lo)
 
         below = hist["Close"] < green_line
-        days_below = below[::-1].cumprod().sum()
+        days_below = below.iloc[-120:].sum()
 
         if days_below < MIN_DAYS_BELOW_FIB:
             continue
 
-        # === PHASE A: BEARISH RESET (min 1 von 3) ===
+        # ============================================================
+        # PHASE A – RESET (innerhalb 120 Tage erlaubt)
+        # ============================================================
+
+        hist_reset = hist.iloc[-RESET_LOOKBACK:]
+
         reset_ok = False
         reset_type = None
 
-        # A1 Stop-Hunt / Liquidity Sweep
+        # A1 Liquidity Sweep
         swing_low = hist["Low"].rolling(40).min().shift()
         sweep = (
             (hist["Low"] < swing_low) &
             ((hist["Close"] - hist["Low"]) /
              (hist["High"] - hist["Low"] + 1e-6) > 0.6)
         )
-        if sweep.iloc[-10:].any():
+        if sweep.loc[hist_reset.index].any():
             reset_ok = True
             reset_type = "liquidity_sweep"
 
@@ -90,51 +93,73 @@ def main():
             ((hist["High"] - hist["Low"]) >
              1.5 * (hist["High"] - hist["Low"]).rolling(20).median())
         )
-        if climax.iloc[-20:].any():
+        if climax.loc[hist_reset.index].any():
             reset_ok = True
             reset_type = "volume_climax"
 
         # A3 Failed Breakdown
         breakdown = hist["Close"] < hist["Low"].rolling(30).min().shift()
         failed = breakdown & (hist["Close"].shift(-3) > hist["Close"])
-        if failed.iloc[-20:].any():
+        if failed.loc[hist_reset.index].any():
             reset_ok = True
             reset_type = "failed_breakdown"
 
         if not reset_ok:
             continue
 
-        # === PHASE B: COMPRESSION / ACCUMULATION (Pflicht) ===
-        atr14 = atr(hist["High"], hist["Low"], hist["Close"], ATR_LEN)
-        atr_drop = atr14.iloc[-1] < 0.7 * atr14.iloc[-30]
+        # ============================================================
+        # PHASE B – COMPRESSION (Median vs Median)
+        # ============================================================
 
-        rng_med_now = (hist["High"] - hist["Low"]).iloc[-15:].median()
-        rng_med_prev = (hist["High"] - hist["Low"]).iloc[-60:-30].median()
-        range_contract = rng_med_now < 0.75 * rng_med_prev
+        atr14 = atr(hist["High"], hist["Low"], hist["Close"], ATR_LEN)
+
+        atr_now  = atr14.iloc[-15:].median()
+        atr_prev = atr14.iloc[-60:-30].median()
+
+        atr_drop = atr_now < 0.75 * atr_prev
+
+        rng_now  = (hist["High"] - hist["Low"]).iloc[-20:].median()
+        rng_prev = (hist["High"] - hist["Low"]).iloc[-60:-30].median()
+
+        range_contract = rng_now < 0.75 * rng_prev
 
         if not (atr_drop and range_contract):
             continue
 
-        # === PHASE C: SUPPLY DRY / STRUCTURE SHIFT (Pflicht) ===
-        down_moves = hist["Close"].diff()
-        last_down = down_moves[down_moves < 0].iloc[-1]
-        prev_down = down_moves[down_moves < 0].iloc[-3]
+        # ============================================================
+        # PHASE C – SUPPLY DRY (Strukturell)
+        # ============================================================
 
-        supply_dry = abs(last_down) < 0.7 * abs(prev_down)
+        down_moves = hist["Close"].diff()
+        down_abs = down_moves[down_moves < 0].abs()
+
+        if len(down_abs) < 10:
+            continue
+
+        recent_down  = down_abs.iloc[-5:].median()
+        prior_down   = down_abs.iloc[-20:-5].median()
+
+        supply_dry = recent_down < 0.7 * prior_down
 
         marginal_lows = (
             hist["Low"].iloc[-1] >
-            hist["Low"].iloc[-5] - 0.3 * atr14.iloc[-1]
+            hist["Low"].iloc[-10:].min()
         )
 
         if not (supply_dry or marginal_lows):
             continue
 
-        # === PHASE D: .382 BREAK (Gate) ===
+        # ============================================================
+        # PHASE D – .382 BREAK (Gate)
+        # ============================================================
+
         if t0["Close"] <= green_line:
             continue
 
-        # === PHASE E: BREAK QUALITY ===
+        # ============================================================
+        # PHASE E – BREAK QUALITY
+        # ============================================================
+
         rng0 = t0["High"] - t0["Low"]
         rng_med = (hist["High"] - hist["Low"]).rolling(20).median().iloc[-1]
         vol_med = hist["Volume"].rolling(20).median().iloc[-1]
@@ -146,7 +171,10 @@ def main():
         if (t0["Close"] - t0["Low"]) / (rng0 + 1e-6) < 0.7:
             continue
 
-        # === RISK SETUP ===
+        # ============================================================
+        # RISK
+        # ============================================================
+
         entry = float(t0["Close"])
         stop = float(t0["Low"])
         risk_ps = entry - stop
@@ -156,6 +184,7 @@ def main():
 
         shares = int(RISK_EUR / risk_ps)
         invest = shares * entry
+
         if shares <= 0 or invest > MAX_INVEST:
             continue
 
@@ -179,7 +208,7 @@ def main():
 
     out = pd.DataFrame(rows)
     if out.empty:
-        print("Keine v1.6 CRC-STRICT Treffer.")
+        print("Keine v1.6.1 CRC-STRUCTURAL Treffer.")
         return
 
     out.sort_values(
@@ -194,9 +223,9 @@ def main():
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.6_CRC_STRICT",
+            "version": "v1.6.1_CRC_STRUCTURAL",
             "hits": int(len(out)),
-            "logic": "reset + compression + supply_dry + .382_gate"
+            "logic": "structural_reset + accumulation + supply_dry + .382_gate"
         }, f, indent=2)
 
     print(f"Done → {OUT_CSV} | Hits={len(out)}")
