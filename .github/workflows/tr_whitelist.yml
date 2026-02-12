@@ -1,8 +1,8 @@
-name: Update TR Whitelist (weekly)
+name: Update TR Stock Whitelist (weekly)
 
 on:
   schedule:
-    - cron: "20 03 * * 0"  # Sonntags 03:20 UTC (vor 04:00 Cache)
+    - cron: "20 3 * * 0"   # Sonntag 03:20 UTC
   workflow_dispatch: {}
 
 permissions:
@@ -11,28 +11,33 @@ permissions:
 jobs:
   tr-whitelist:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Build TR whitelist from PDF
+
+      - name: Build TR STOCK whitelist from PDF (all countries)
         env:
           TR_PDF_URL: https://assets.traderepublic.com/assets/files/DE/Instrument_Universe_DE_en.pdf
-          TR_CACHE_PATH: data/tr_us_whitelist.csv
-          OPENFIGI_API_KEY: ${{ secrets.OPENFIGI_API_KEY }}  # optional
+          TR_CACHE_PATH: data/tr_stock_whitelist.csv
+          OPENFIGI_API_KEY: ${{ secrets.OPENFIGI_API_KEY }}
         run: |
           mkdir -p data
-          python scripts/tr_whitelist_from_pdf.py
-          test -s data/tr_us_whitelist.csv
+          python build_tr_cache.py
+          test -s data/tr_stock_whitelist.csv
+
       - name: Commit whitelist
         run: |
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
-          git add data/tr_us_whitelist.csv
-          git commit -m "chore: refresh TR whitelist" || echo "no changes"
+          git add data/tr_stock_whitelist.csv
+          git commit -m "chore: refresh TR stock whitelist (all countries)" || echo "no changes"
           git push
