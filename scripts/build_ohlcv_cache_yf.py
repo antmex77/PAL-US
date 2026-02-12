@@ -17,8 +17,12 @@ import pandas as pd
 
 LOOKBACK_D = int(os.getenv("LOOKBACK", "250"))
 PERIOD_D   = int(os.getenv("PERIOD_DAYS", "430"))
-TR_CSV     = os.getenv("TR_CACHE_PATH", "data/tr_us_whitelist.csv")
+
+# 🔥 GLOBAL STOCK WHITELIST (kein US-Default mehr)
+TR_CSV     = os.getenv("TR_CACHE_PATH", "data/tr_stock_whitelist.csv")
+
 OUT_CSV    = "data/levels_cache_250d.csv"
+
 
 # -------------------------
 # Helpers
@@ -29,18 +33,18 @@ def today_utc_date():
 
 def last_expected_trading_day(today):
     """
-    US equities:
+    US equities logic (EOD check):
     - Mon -> Fri
     - Sat -> Fri
     - Sun -> Fri
     - Tue–Fri -> Yesterday
     """
-    wd = today.weekday()  # Mon=0 ... Sun=6
-    if wd == 0:   # Monday
+    wd = today.weekday()
+    if wd == 0:
         return today - timedelta(days=3)
-    if wd == 5:   # Saturday
+    if wd == 5:
         return today - timedelta(days=1)
-    if wd == 6:   # Sunday
+    if wd == 6:
         return today - timedelta(days=2)
     return today - timedelta(days=1)
 
@@ -49,6 +53,7 @@ def normalize_for_yf(t: str) -> str:
 
 def from_yf_to_orig(t: str) -> str:
     return str(t).replace("-", ".")
+
 
 # -------------------------
 # Load universe
@@ -68,6 +73,7 @@ def load_universe() -> list[str]:
     print(f"Universe loaded: {len(syms)} symbols")
     return syms
 
+
 # -------------------------
 # Download
 # -------------------------
@@ -83,6 +89,7 @@ def yf_download_batch(tickers: list[str]) -> pd.DataFrame:
         threads=True,
         progress=False
     )
+
 
 # -------------------------
 # Main
@@ -133,12 +140,10 @@ def main():
 
     allx = pd.concat(chunks, ignore_index=True)
 
-    # Pflichtspalten absichern
     for c in ["Open", "High", "Low", "Close", "Volume"]:
         if c not in allx.columns:
             raise SystemExit(f"❌ Fehlende Spalte: {c}")
 
-    # Datum normalisieren
     allx["date"] = pd.to_datetime(allx["date"], utc=True).dt.date
     allx = allx[["date","symbol","Open","High","Low","Close","Volume"]].dropna(how="any")
     allx = allx.sort_values(["symbol", "date"])
@@ -167,7 +172,6 @@ def main():
     print(f"✅ Done -> {OUT_CSV}")
     print(f"Rows: {len(allx)} | Symbols: {allx['symbol'].nunique()}")
 
-# -------------------------
 
 if __name__ == "__main__":
     main()
