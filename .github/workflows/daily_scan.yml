@@ -18,15 +18,22 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    env:
+      TR_CACHE_PATH: data/tr_stock_whitelist.csv
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
       - name: Run scan (cache-only; Gap-only + Score)
         run: |
           python scripts/scan_daily_from_cache.py
@@ -41,6 +48,7 @@ jobs:
           else:
             print("pal_hits_daily.csv fehlt")
           PY
+
       - name: Commit outputs
         run: |
           git config user.name "github-actions[bot]"
@@ -48,6 +56,7 @@ jobs:
           git add out/pal_hits_daily.csv out/summary.json
           git commit -m "daily scan ($(date -u +'%Y-%m-%dT%H:%MZ'))" || echo "nothing to commit"
           git push
+
       - name: Upload artifact (CSV + summary)
         if: always()
         uses: actions/upload-artifact@v4
