@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Build TR whitelist (US only)
+# Build TR whitelist (US common stocks only)
 
 import os
 import re
@@ -13,15 +13,16 @@ OUT_PATH = os.getenv("TR_CACHE_PATH", "data/tr_stock_whitelist.csv")
 OPENFIGI_API_KEY = os.getenv("OPENFIGI_API_KEY")
 
 FIGI_URL = "https://api.openfigi.com/v3/mapping"
+
 HEADERS = {
     "Content-Type": "application/json",
     "X-OPENFIGI-APIKEY": OPENFIGI_API_KEY
 }
 
 
-# --------------------------------------------------
-# Extract ISINs from PDF
-# --------------------------------------------------
+# -----------------------------
+# Extract ISINs
+# -----------------------------
 
 def extract_isins_from_pdf(url):
     print("Downloading TR PDF...")
@@ -43,15 +44,16 @@ def extract_isins_from_pdf(url):
     return list(isins)
 
 
-# --------------------------------------------------
-# Map ISIN → US Ticker only
-# --------------------------------------------------
+# -----------------------------
+# Map & filter properly
+# -----------------------------
 
-def openfigi_batch_isin_to_us_ticker(isins, batch_size=100):
+def openfigi_batch_filter_us_common(isins, batch_size=100):
 
-    us_rows = []
+    rows = []
 
     for i in range(0, len(isins), batch_size):
+
         batch = isins[i:i+batch_size]
         jobs = [{"idType": "ID_ISIN", "idValue": x} for x in batch]
 
@@ -60,29 +62,35 @@ def openfigi_batch_isin_to_us_ticker(isins, batch_size=100):
         data = resp.json()
 
         for isin, result in zip(batch, data):
+
             if "data" not in result:
                 continue
 
             for r in result["data"]:
-                if r.get("exchCode") == "US" and r.get("ticker"):
-                    us_rows.append({
+
+                if (
+                    r.get("exchCode") == "US"
+                    and r.get("marketSector") == "Equity"
+                    and r.get("securityType") == "Common Stock"
+                    and r.get("ticker")
+                ):
+                    rows.append({
                         "isin": isin,
                         "ticker": r["ticker"],
-                        "name": r.get("name", ""),
-                        "exchCode": r.get("exchCode")
+                        "name": r.get("name", "")
                     })
-                    break  # nur erste US-Zuordnung
+                    break
 
         print(f"... mapped {min(i+batch_size, len(isins))}/{len(isins)}")
         time.sleep(0.25)
 
-    print(f"US stocks found: {len(us_rows)}")
-    return us_rows
+    print(f"US Common Stocks found: {len(rows)}")
+    return rows
 
 
-# --------------------------------------------------
+# -----------------------------
 # Main
-# --------------------------------------------------
+# -----------------------------
 
 def main():
 
@@ -92,19 +100,19 @@ def main():
         raise SystemExit("OPENFIGI_API_KEY not set")
 
     isins = extract_isins_from_pdf(TR_PDF_URL)
-    us_data = openfigi_batch_isin_to_us_ticker(isins)
+    rows = openfigi_batch_filter_us_common(isins)
 
-    if not us_data:
-        raise SystemExit("No US stocks found")
+    if not rows:
+        raise SystemExit("No US common stocks found")
 
-    df = pd.DataFrame(us_data).drop_duplicates(subset=["ticker"])
+    df = pd.DataFrame(rows).drop_duplicates(subset=["ticker"])
     df = df.sort_values("ticker")
 
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
     df.to_csv(OUT_PATH, index=False)
 
     print(f"Saved → {OUT_PATH}")
-    print(f"Final US universe size: {len(df)}")
+    print(f"Final US Common Stock universe size: {len(df)}")
 
 
 if __name__ == "__main__":
