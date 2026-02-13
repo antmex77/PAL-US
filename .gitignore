@@ -30,7 +30,7 @@ out/**
 # --- Data: alles ignorieren, ABER bestimmte CSVs versionieren ---
 data/**
 !data/
-!data/tr_us_whitelist.csv
+!data/tr_stock_whitelist.csv
 !data/levels_cache_250d.csv
 # (optional) falls du manuell ein Universum pflegst:
 !data/universe_us.csv
