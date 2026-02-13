@@ -9,7 +9,7 @@ import pandas as pd
 
 LOOKBACK_D = int(os.getenv("LOOKBACK", "250"))
 PERIOD_D   = int(os.getenv("PERIOD_DAYS", "430"))
-TR_CSV     = os.getenv("TR_CACHE_PATH", "data/tr_stock_whitelist.csv")
+TR_CSV     = os.getenv("TR_CACHE_PATH", "data/tr_us_whitelist.csv")
 OUT_CSV    = "data/levels_cache_250d.csv"
 
 
