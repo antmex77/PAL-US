@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-# Build OHLCV Cache v2.1 (EOD, weekday-aware)
-# Output: data/levels_cache_250d.csv
-#
-# FIXES:
-# - Börsentags-logische Staleness-Prüfung (kein Weekend-Bug mehr)
-# - Explizites Logging der letzten Kerze
-# - Harter Abbruch bei echten Stale-Daten
-#
-# Datenquelle: yfinance (EOD)
+# Build OHLCV Cache v2.2 (robust universe clean)
 
 import os
 import time
@@ -17,28 +9,19 @@ import pandas as pd
 
 LOOKBACK_D = int(os.getenv("LOOKBACK", "250"))
 PERIOD_D   = int(os.getenv("PERIOD_DAYS", "430"))
-
-# 🔥 GLOBAL STOCK WHITELIST (kein US-Default mehr)
 TR_CSV     = os.getenv("TR_CACHE_PATH", "data/tr_stock_whitelist.csv")
-
 OUT_CSV    = "data/levels_cache_250d.csv"
 
 
-# -------------------------
+# --------------------------------------------------
 # Helpers
-# -------------------------
+# --------------------------------------------------
 
 def today_utc_date():
     return pd.Timestamp.now("UTC").date()
 
+
 def last_expected_trading_day(today):
-    """
-    US equities logic (EOD check):
-    - Mon -> Fri
-    - Sat -> Fri
-    - Sun -> Fri
-    - Tue–Fri -> Yesterday
-    """
     wd = today.weekday()
     if wd == 0:
         return today - timedelta(days=3)
@@ -48,37 +31,56 @@ def last_expected_trading_day(today):
         return today - timedelta(days=2)
     return today - timedelta(days=1)
 
+
 def normalize_for_yf(t: str) -> str:
-    return str(t).replace(".", "-").replace("/", "-").upper()
+    return t.replace(".", "-").replace("/", "-").upper()
+
 
 def from_yf_to_orig(t: str) -> str:
-    return str(t).replace("-", ".")
+    return t.replace("-", ".")
 
 
-# -------------------------
-# Load universe
-# -------------------------
+# --------------------------------------------------
+# Load Universe (FIXED)
+# --------------------------------------------------
 
-def load_universe() -> list[str]:
+def load_universe():
+
     if not os.path.exists(TR_CSV):
-        raise SystemExit(f"❌ TR whitelist fehlt: {TR_CSV}")
+        raise SystemExit(f"❌ Whitelist fehlt: {TR_CSV}")
 
     df = pd.read_csv(TR_CSV)
-    if "ticker" not in df.columns:
-        raise SystemExit(f"❌ {TR_CSV} ohne Spalte 'ticker'")
 
-    syms = sorted(set(df["ticker"].astype(str)))
-    syms = [s for s in syms if s and "/" not in s and " " not in s]
+    if "ticker" not in df.columns:
+        raise SystemExit("❌ CSV ohne Spalte 'ticker'")
+
+    # 🔥 FIX: NaN & leere entfernen
+    syms = (
+        df["ticker"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+
+    syms = syms[syms != ""]
+    syms = syms[~syms.str.contains(" ")]
+    syms = syms[~syms.str.contains("/")]
+
+    syms = sorted(set(syms))
 
     print(f"Universe loaded: {len(syms)} symbols")
+
+    if not syms:
+        raise SystemExit("❌ Universum leer nach Cleaning")
+
     return syms
 
 
-# -------------------------
-# Download
-# -------------------------
+# --------------------------------------------------
+# yfinance Download
+# --------------------------------------------------
 
-def yf_download_batch(tickers: list[str]) -> pd.DataFrame:
+def yf_download_batch(tickers):
     import yfinance as yf
     return yf.download(
         tickers=" ".join(tickers),
@@ -91,28 +93,26 @@ def yf_download_batch(tickers: list[str]) -> pd.DataFrame:
     )
 
 
-# -------------------------
+# --------------------------------------------------
 # Main
-# -------------------------
+# --------------------------------------------------
 
 def main():
+
     today = today_utc_date()
     expected_last_bar = last_expected_trading_day(today)
 
     syms = load_universe()
-    if not syms:
-        raise SystemExit("❌ Universum leer")
-
     yf_syms = [normalize_for_yf(s) for s in syms]
 
     chunks = []
     STEP = 120
 
-    print(f"Downloading OHLCV up to {today} (expected last bar ≥ {expected_last_bar})")
+    print(f"Downloading OHLCV (expected ≥ {expected_last_bar})")
 
     for i in range(0, len(yf_syms), STEP):
         batch = yf_syms[i:i+STEP]
-        print(f"... {min(i+STEP, len(yf_syms))} / {len(yf_syms)}")
+        print(f"... {min(i+STEP, len(yf_syms))}/{len(yf_syms)}")
 
         df = yf_download_batch(batch)
         if df is None or df.empty:
@@ -145,31 +145,21 @@ def main():
             raise SystemExit(f"❌ Fehlende Spalte: {c}")
 
     allx["date"] = pd.to_datetime(allx["date"], utc=True).dt.date
-    allx = allx[["date","symbol","Open","High","Low","Close","Volume"]].dropna(how="any")
+    allx = allx[["date","symbol","Open","High","Low","Close","Volume"]].dropna()
     allx = allx.sort_values(["symbol", "date"])
-
-    # Nur relevante Historie behalten
     allx = allx.groupby("symbol").tail(LOOKBACK_D + 40)
-
-    # -------------------------
-    # STALENESS CHECK
-    # -------------------------
 
     latest_bar = allx["date"].max()
     print(f"Latest bar in cache: {latest_bar}")
 
     if latest_bar < expected_last_bar:
-        print(f"❌ STALE DATA: latest={latest_bar}, expected>={expected_last_bar}")
+        print(f"❌ STALE DATA: latest={latest_bar}, expected≥{expected_last_bar}")
         sys.exit(1)
-
-    # -------------------------
-    # Write cache
-    # -------------------------
 
     os.makedirs("data", exist_ok=True)
     allx.to_csv(OUT_CSV, index=False)
 
-    print(f"✅ Done -> {OUT_CSV}")
+    print(f"✅ Done → {OUT_CSV}")
     print(f"Rows: {len(allx)} | Symbols: {allx['symbol'].nunique()}")
 
 
