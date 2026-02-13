@@ -15,7 +15,7 @@ import requests
 import pandas as pd
 
 PDF_URL     = os.getenv("TR_PDF_URL", "https://assets.traderepublic.com/assets/files/DE/Instrument_Universe_DE_en.pdf")
-CACHE_PATH  = os.getenv("TR_CACHE_PATH", "data/tr_stock_whitelist.csv")
+CACHE_PATH  = os.getenv("TR_CACHE_PATH", "data/tr_us_whitelist.csv")
 OF_KEY      = os.getenv("OPENFIGI_API_KEY", "").strip()
 MAX_RETRY   = int(os.getenv("MAX_RETRY", "4"))
 MAX_BACKOFF = float(os.getenv("MAX_BACKOFF", "12"))
