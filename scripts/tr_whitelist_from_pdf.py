@@ -1,180 +1,110 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Build Trade Republic STOCK whitelist (global) from PDF.
-
-Env:
-  TR_PDF_URL        (optional)
-  TR_CACHE_PATH     (optional, default data/tr_stock_whitelist.csv)
-  OPENFIGI_API_KEY  (optional but recommended)
-"""
+# Build TR whitelist (US only)
 
 import os
-import io
 import re
-import time
-import json
-import sys
 import requests
+import pdfplumber
 import pandas as pd
+import time
 
-PDF_URL = os.getenv(
-    "TR_PDF_URL",
-    "https://assets.traderepublic.com/assets/files/DE/Instrument_Universe_DE_en.pdf"
-)
+TR_PDF_URL = os.getenv("TR_PDF_URL")
+OUT_PATH = os.getenv("TR_CACHE_PATH", "data/tr_stock_whitelist.csv")
+OPENFIGI_API_KEY = os.getenv("OPENFIGI_API_KEY")
 
-CACHE_PATH = os.getenv(
-    "TR_CACHE_PATH",
-    "data/tr_stock_whitelist.csv"
-)
-
-OF_KEY = os.getenv("OPENFIGI_API_KEY", "").strip()
-MAX_RETRY = 4
-MAX_BACKOFF = 12.0
-
-UA = {"User-Agent": "Mozilla/5.0"}
+FIGI_URL = "https://api.openfigi.com/v3/mapping"
+HEADERS = {
+    "Content-Type": "application/json",
+    "X-OPENFIGI-APIKEY": OPENFIGI_API_KEY
+}
 
 
-# ---------------------------------------------------
-# HTTP Helpers
-# ---------------------------------------------------
+# --------------------------------------------------
+# Extract ISINs from PDF
+# --------------------------------------------------
 
-def _get(url, timeout=60):
-    backoff = 1.0
-    for _ in range(MAX_RETRY):
-        try:
-            r = requests.get(url, timeout=timeout, headers=UA)
-            if r.status_code == 429:
-                time.sleep(min(MAX_BACKOFF, backoff))
-                backoff *= 2
-                continue
-            r.raise_for_status()
-            return r
-        except Exception as e:
-            err = e
-            time.sleep(min(MAX_BACKOFF, backoff))
-            backoff *= 2
-    raise err
-
-
-def _post(url, payload, headers, timeout=60):
-    backoff = 1.0
-    for _ in range(MAX_RETRY):
-        try:
-            r = requests.post(url, data=payload, headers=headers, timeout=timeout)
-            if r.status_code == 429:
-                time.sleep(min(MAX_BACKOFF, backoff))
-                backoff *= 2
-                continue
-            r.raise_for_status()
-            return r
-        except Exception as e:
-            err = e
-            time.sleep(min(MAX_BACKOFF, backoff))
-            backoff *= 2
-    raise err
-
-
-# ---------------------------------------------------
-# OpenFIGI Mapping
-# ---------------------------------------------------
-
-def openfigi_batch_isin_to_ticker(isins):
-    url = "https://api.openfigi.com/v3/mapping"
-    headers = {"Content-Type": "application/json"}
-    if OF_KEY:
-        headers["X-OPENFIGI-APIKEY"] = OF_KEY
-
-    batch_size = 100 if OF_KEY else 10
-    out = {}
-
-    for i in range(0, len(isins), batch_size):
-        chunk = isins[i:i+batch_size]
-
-        jobs = [{"idType": "ID_ISIN", "idValue": isin} for isin in chunk]
-
-        try:
-            resp = _post(url, json.dumps(jobs), headers).json()
-        except Exception as e:
-            print(f"[WARN] OpenFIGI chunk failed: {e}")
-            continue
-
-        for isin, job in zip(chunk, resp):
-            rows = job.get("data") or []
-            for r in rows:
-                if r.get("marketSector") != "Equity":
-                    continue
-                ticker = r.get("ticker")
-                if ticker:
-                    out[isin] = ticker.upper()
-                    break
-
-        print(f"OpenFIGI progress: {min(i+batch_size,len(isins))}/{len(isins)}")
-        time.sleep(0.25 if OF_KEY else 1.0)
-
-    return out
-
-
-# ---------------------------------------------------
-# Main
-# ---------------------------------------------------
-
-def main():
-
-    try:
-        import pdfplumber
-    except ImportError:
-        print("pdfplumber missing. pip install pdfplumber", file=sys.stderr)
-        sys.exit(2)
-
-    os.makedirs(os.path.dirname(CACHE_PATH) or ".", exist_ok=True)
-
+def extract_isins_from_pdf(url):
     print("Downloading TR PDF...")
-    buf = io.BytesIO(_get(PDF_URL).content)
-
-    isin_re = re.compile(r"\b[A-Z]{2}[A-Z0-9]{9}\d\b")
+    r = requests.get(url)
+    r.raise_for_status()
 
     isins = set()
 
-    with pdfplumber.open(buf) as pdf:
+    with pdfplumber.open(r.content) as pdf:
         total = len(pdf.pages)
-        for i, page in enumerate(pdf.pages, start=1):
+        for i, page in enumerate(pdf.pages, 1):
             text = page.extract_text() or ""
-            found = isin_re.findall(text)
-            for isin in found:
-                isins.add(isin)
-
+            found = re.findall(r"\b[A-Z]{2}[A-Z0-9]{9}\d\b", text)
+            isins.update(found)
             if i % 25 == 0 or i == total:
                 print(f"... parsed {i}/{total} pages")
 
-    isins = sorted(isins)
     print(f"Total ISINs found: {len(isins)}")
+    return list(isins)
 
-    if not isins:
-        print("No ISINs extracted. Aborting.")
-        sys.exit(1)
 
-    mapped = openfigi_batch_isin_to_ticker(isins)
+# --------------------------------------------------
+# Map ISIN → US Ticker only
+# --------------------------------------------------
 
-    rows = []
-    for isin in isins:
-        ticker = mapped.get(isin, "")
-        if ticker:
-            rows.append({
-                "isin": isin,
-                "ticker": ticker
-            })
+def openfigi_batch_isin_to_us_ticker(isins, batch_size=100):
 
-    df = pd.DataFrame(rows).drop_duplicates("ticker")
+    us_rows = []
 
-    if df.empty:
-        print("No tickers mapped. Aborting.")
-        sys.exit(1)
+    for i in range(0, len(isins), batch_size):
+        batch = isins[i:i+batch_size]
+        jobs = [{"idType": "ID_ISIN", "idValue": x} for x in batch]
 
-    df.to_csv(CACHE_PATH, index=False)
+        resp = requests.post(FIGI_URL, json=jobs, headers=HEADERS)
+        resp.raise_for_status()
+        data = resp.json()
 
-    print(f"Done. Rows={len(df)} → {CACHE_PATH}")
+        for isin, result in zip(batch, data):
+            if "data" not in result:
+                continue
+
+            for r in result["data"]:
+                if r.get("exchCode") == "US" and r.get("ticker"):
+                    us_rows.append({
+                        "isin": isin,
+                        "ticker": r["ticker"],
+                        "name": r.get("name", ""),
+                        "exchCode": r.get("exchCode")
+                    })
+                    break  # nur erste US-Zuordnung
+
+        print(f"... mapped {min(i+batch_size, len(isins))}/{len(isins)}")
+        time.sleep(0.25)
+
+    print(f"US stocks found: {len(us_rows)}")
+    return us_rows
+
+
+# --------------------------------------------------
+# Main
+# --------------------------------------------------
+
+def main():
+
+    if not TR_PDF_URL:
+        raise SystemExit("TR_PDF_URL not set")
+    if not OPENFIGI_API_KEY:
+        raise SystemExit("OPENFIGI_API_KEY not set")
+
+    isins = extract_isins_from_pdf(TR_PDF_URL)
+    us_data = openfigi_batch_isin_to_us_ticker(isins)
+
+    if not us_data:
+        raise SystemExit("No US stocks found")
+
+    df = pd.DataFrame(us_data).drop_duplicates(subset=["ticker"])
+    df = df.sort_values("ticker")
+
+    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
+    df.to_csv(OUT_PATH, index=False)
+
+    print(f"Saved → {OUT_PATH}")
+    print(f"Final US universe size: {len(df)}")
 
 
 if __name__ == "__main__":
