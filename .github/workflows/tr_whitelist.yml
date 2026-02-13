@@ -31,7 +31,7 @@ jobs:
           OPENFIGI_API_KEY: ${{ secrets.OPENFIGI_API_KEY }}
         run: |
           mkdir -p data
-          python build_tr_cache.py
+          python scripts/build_tr_cache.py
           test -s data/tr_stock_whitelist.csv
 
       - name: Commit whitelist
