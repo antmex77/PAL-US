@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# PAL Daily Scan – v1.6.1 CRC-STRUCTURAL
+# PAL Daily Scan – v1.7.0 CRC + TREND REACCEL
 #
-# Reset → Akkumulation → Supply Dry → .382 Gate Break
+# CRC: Reset → Akkumulation → Supply Dry → .382 Gate Break
+# TREND_REACCEL: Base → Higher Low → 60d Swing Break
 # OHLCV only
 
 import os
@@ -55,7 +56,10 @@ def main():
         t0 = g.iloc[-1]
         hist = g.iloc[-(LOOKBACK_TOTAL+1):-1]
 
-        # === GREEN LINE (.382 unverändert) ===
+        # ============================================================
+        # GREEN LINE (.382)
+        # ============================================================
+
         hi = hist["High"].max()
         lo = hist["Low"].min()
         green_line = hi - 0.382 * (hi - lo)
@@ -63,19 +67,14 @@ def main():
         below = hist["Close"] < green_line
         days_below = below.iloc[-120:].sum()
 
-        if days_below < MIN_DAYS_BELOW_FIB:
-            continue
-
         # ============================================================
-        # PHASE A – RESET (innerhalb 120 Tage erlaubt)
+        # PHASE A – RESET (CRC only)
         # ============================================================
 
         hist_reset = hist.iloc[-RESET_LOOKBACK:]
-
         reset_ok = False
         reset_type = None
 
-        # A1 Liquidity Sweep
         swing_low = hist["Low"].rolling(40).min().shift()
         sweep = (
             (hist["Low"] < swing_low) &
@@ -86,7 +85,6 @@ def main():
             reset_ok = True
             reset_type = "liquidity_sweep"
 
-        # A2 Volume Climax
         vol_med = hist["Volume"].rolling(VOL_LEN).median()
         climax = (
             (hist["Volume"] > 2.5 * vol_med) &
@@ -97,18 +95,14 @@ def main():
             reset_ok = True
             reset_type = "volume_climax"
 
-        # A3 Failed Breakdown
         breakdown = hist["Close"] < hist["Low"].rolling(30).min().shift()
         failed = breakdown & (hist["Close"].shift(-3) > hist["Close"])
         if failed.loc[hist_reset.index].any():
             reset_ok = True
             reset_type = "failed_breakdown"
 
-        if not reset_ok:
-            continue
-
         # ============================================================
-        # PHASE B – COMPRESSION (Median vs Median)
+        # PHASE B – COMPRESSION (CRC only)
         # ============================================================
 
         atr14 = atr(hist["High"], hist["Low"], hist["Close"], ATR_LEN)
@@ -123,50 +117,57 @@ def main():
 
         range_contract = rng_now < 0.75 * rng_prev
 
-        if not (atr_drop and range_contract):
-            continue
+        crc_structure_ok = reset_ok and atr_drop and range_contract and days_below >= MIN_DAYS_BELOW_FIB
 
         # ============================================================
-        # PHASE C – SUPPLY DRY (Strukturell)
+        # PHASE C – SUPPLY DRY (CRC only)
         # ============================================================
 
         down_moves = hist["Close"].diff()
         down_abs = down_moves[down_moves < 0].abs()
 
-        if len(down_abs) < 10:
-            continue
+        supply_ok = False
 
-        recent_down  = down_abs.iloc[-5:].median()
-        prior_down   = down_abs.iloc[-20:-5].median()
+        if len(down_abs) >= 10:
+            recent_down  = down_abs.iloc[-5:].median()
+            prior_down   = down_abs.iloc[-20:-5].median()
+            supply_dry = recent_down < 0.7 * prior_down
+            marginal_lows = (
+                hist["Low"].iloc[-1] >
+                hist["Low"].iloc[-10:].min()
+            )
+            supply_ok = supply_dry or marginal_lows
 
-        supply_dry = recent_down < 0.7 * prior_down
+        crc_ready = crc_structure_ok and supply_ok and (t0["Close"] > green_line)
 
-        marginal_lows = (
-            hist["Low"].iloc[-1] >
-            hist["Low"].iloc[-10:].min()
-        )
+        # ============================================================
+        # TREND REACCEL SETUP
+        # ============================================================
 
-        if not (supply_dry or marginal_lows):
+        swing_high_60 = hist["High"].iloc[-60:].max()
+        low_60 = hist["Low"].iloc[-60:].min()
+        recent_low = hist["Low"].iloc[-10:].min()
+
+        structure_ok = recent_low > low_60
+        swing_break = t0["Close"] > swing_high_60
+        near_250_high = t0["Close"] > 0.98 * hi
+
+        trend_reaccel = structure_ok and swing_break and not near_250_high
+
+        if not (crc_ready or trend_reaccel):
             continue
 
         # ============================================================
-        # PHASE D – .382 BREAK (Gate)
-        # ============================================================
-
-        if t0["Close"] <= green_line:
-            continue
-
-        # ============================================================
-        # PHASE E – BREAK QUALITY
+        # BREAK QUALITY (für beide)
         # ============================================================
 
         rng0 = t0["High"] - t0["Low"]
         rng_med = (hist["High"] - hist["Low"]).rolling(20).median().iloc[-1]
-        vol_med = hist["Volume"].rolling(20).median().iloc[-1]
+        vol_med2 = hist["Volume"].rolling(20).median().iloc[-1]
 
         if rng0 < 1.3 * rng_med:
             continue
-        if t0["Volume"] < 1.5 * vol_med:
+        if t0["Volume"] < 1.5 * vol_med2:
             continue
         if (t0["Close"] - t0["Low"]) / (rng0 + 1e-6) < 0.7:
             continue
@@ -191,9 +192,12 @@ def main():
         target_2r = entry + 2 * risk_ps
         rr_to_250 = (hi - entry) / risk_ps
 
+        setup_type = "CRC_STRUCTURAL" if crc_ready else "TREND_REACCEL"
+
         rows.append({
             "symbol": sym,
             "date": str(t0["date"]),
+            "setup_type": setup_type,
             "entry": round(entry, 2),
             "stop": round(stop, 2),
             "target_2R": round(target_2r, 2),
@@ -203,19 +207,20 @@ def main():
             "green_line": round(green_line, 2),
             "days_below_green": int(days_below),
             "rr_to_250d_high": round(rr_to_250, 2),
-            "reset_type": reset_type
+            "reset_type": reset_type if crc_ready else "trend_reaccel"
         })
 
     out = pd.DataFrame(rows)
     if out.empty:
-        print("Keine v1.6.1 CRC-STRUCTURAL Treffer.")
+        print("Keine Treffer (CRC oder TREND_REACCEL).")
         return
 
     out.sort_values(
-        by=["days_below_green", "rr_to_250d_high"],
-        ascending=[False, False],
+        by=["setup_type", "rr_to_250d_high"],
+        ascending=[True, False],
         inplace=True
     )
+
     out.insert(0, "rank", range(1, len(out)+1))
 
     os.makedirs("out", exist_ok=True)
@@ -223,9 +228,9 @@ def main():
 
     with open("out/summary.json", "w") as f:
         json.dump({
-            "version": "v1.6.1_CRC_STRUCTURAL",
+            "version": "v1.7.0_CRC_PLUS_REACCEL",
             "hits": int(len(out)),
-            "logic": "structural_reset + accumulation + supply_dry + .382_gate"
+            "logic": "CRC_structural OR trend_reacceleration"
         }, f, indent=2)
 
     print(f"Done → {OUT_CSV} | Hits={len(out)}")
