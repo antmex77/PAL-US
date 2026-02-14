@@ -1,3 +1,8 @@
-rank,symbol,date,entry,stop,target_2R,risk_per_share,shares_for_100eur,invest_eur,green_line,days_below_green,rr_to_250d_high,rvol20
-1,DVA,2026-02-05,149.22,142.51,162.64,6.71,14,2089.0,148.82,135,4.35,2.37
-2,VVV,2026-02-05,36.76,35.57,39.14,1.19,84,3088.0,36.43,89,3.84,2.09
+rank,symbol,date,setup_type,entry,stop,target_2R,risk_per_share,shares_for_100eur,invest_eur,green_line,days_below_green,rr_to_250d_high,reset_type
+1,ATEX,2026-02-13,TREND_REACCEL,31.89,29.55,36.57,2.34,42,1339.0,33.23,120,4.71,trend_reaccel
+2,SRV,2026-02-13,TREND_REACCEL,43.85,42.65,46.25,1.2,83,3640.0,42.72,69,3.43,trend_reaccel
+3,UTI,2026-02-13,TREND_REACCEL,30.35,28.49,34.07,1.86,53,1609.0,30.58,99,3.21,trend_reaccel
+4,SO,2026-02-13,TREND_REACCEL,94.95,92.37,100.11,2.58,38,3608.0,94.06,97,2.28,trend_reaccel
+5,BATRK,2026-02-13,TREND_REACCEL,43.18,41.2,47.14,1.98,50,2159.0,42.7,111,2.02,trend_reaccel
+6,PSA,2026-02-13,TREND_REACCEL,300.35,284.67,331.71,15.68,6,1802.0,297.3,107,1.41,trend_reaccel
+7,CIM,2026-02-13,TREND_REACCEL,14.08,13.24,15.76,0.84,119,1676.0,12.96,65,0.95,trend_reaccel

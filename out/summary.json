@@ -1,7 +1,5 @@
 {
-  "version": "v1.4_GREEN_LINE_RECLAIM_80D",
-  "hits": 2,
-  "min_days_below_green": 80,
-  "risk_model": "SL=SignalLow, TP=2R",
-  "max_invest": 4000
+  "version": "v1.7.0_CRC_PLUS_REACCEL",
+  "hits": 7,
+  "logic": "CRC_structural OR trend_reacceleration"
 }
