@@ -1,5 +1,5 @@
 {
   "version": "v1.7.0_CRC_PLUS_REACCEL",
-  "hits": 3,
+  "hits": 6,
   "logic": "CRC_structural OR trend_reacceleration"
 }
