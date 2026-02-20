@@ -1,5 +1,5 @@
 {
-  "version": "v1.7.0_CRC_PLUS_REACCEL",
+  "version": "v2.0_ACCEPTANCE_BREAK",
   "hits": 3,
-  "logic": "CRC_structural OR trend_reacceleration"
+  "logic": "Day0_break_above_382 + Day1_gap_confirmation"
 }

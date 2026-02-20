@@ -1,4 +1,4 @@
-rank,symbol,date,setup_type,entry,stop,target_2R,risk_per_share,shares_for_100eur,invest_eur,green_line,days_below_green,rr_to_250d_high,reset_type
-1,COLD,2026-02-19,TREND_REACCEL,13.89,12.39,16.9,1.51,66,917.0,18.39,120,6.4,trend_reaccel
-2,LMAT,2026-02-19,TREND_REACCEL,91.86,88.56,98.46,3.3,30,2756.0,92.51,108,4.15,trend_reaccel
-3,TITN,2026-02-19,TREND_REACCEL,20.51,18.6,24.33,1.91,52,1067.0,19.24,104,1.52,trend_reaccel
+rank,symbol,date,setup_type,entry,stop,target_2R,risk_per_share,green_line,break_day_close
+1,BDORY,2026-02-19,ACCEPTANCE_BREAK,5.1,4.66,5.98,0.44,4.68,4.91
+2,KALV,2026-02-19,ACCEPTANCE_BREAK,15.89,14.83,18.01,1.06,15.27,15.45
+3,LNG,2026-02-19,ACCEPTANCE_BREAK,226.19,220.57,237.43,5.62,223.42,223.72
