@@ -1,5 +1,5 @@
 {
   "version": "v2.0_ACCEPTANCE_BREAK",
-  "hits": 3,
+  "hits": 8,
   "logic": "Day0_break_above_382 + Day1_gap_confirmation"
 }
